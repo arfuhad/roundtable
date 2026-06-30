@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from harness.models import AgentRef, Phase, Plan, Status, Subtask, Task, slugify
+from harness.errors import HarnessError
 
 
 def test_agentref_coercion_object_string_and_bare():
@@ -54,7 +55,7 @@ def test_topological_order_respects_deps():
 
 
 def test_cycle_detected():
-    with pytest.raises(ValidationError):
+    with pytest.raises(HarnessError):
         Plan(goal="g", phases=[Phase(id="p1", index=1, title="P", tasks=[
             Task(id="a", title="A", depends_on=["b"]),
             Task(id="b", title="B", depends_on=["a"]),
@@ -62,14 +63,14 @@ def test_cycle_detected():
 
 
 def test_unknown_dependency_rejected():
-    with pytest.raises(ValidationError):
+    with pytest.raises(HarnessError):
         Plan(goal="g", phases=[Phase(id="p1", index=1, title="P", tasks=[
             Task(id="a", title="A", depends_on=["does-not-exist"]),
         ])])
 
 
 def test_duplicate_ids_rejected():
-    with pytest.raises(ValidationError):
+    with pytest.raises(HarnessError):
         Plan(goal="g", phases=[Phase(id="p1", index=1, title="P", tasks=[
             Task(id="a", title="A"),
             Task(id="a", title="A2"),

@@ -260,6 +260,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     root = Path(args.project).resolve()
     config = load_config(root)
     store = Store(root)
+    
+    if args.approve:
+        try:
+            plan = store.load_plan()
+            if not plan.approved:
+                plan.approved = True
+                store.save_plan(plan)
+                print("plan auto-approved via --approve flag.")
+        except Exception:
+            pass # Engine will handle plan loading errors gracefully
+            
     provider = build_provider(config, root)
     engine = Engine(store, config, provider)
     return asyncio.run(_run_with_progress(engine, store, args))
@@ -427,6 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("run", help="execute the approved plan (live progress + web dashboard)")
     sp.add_argument("--project", default=".")
+    sp.add_argument("--approve", action="store_true", help="auto-approve the plan before running")
     sp.add_argument("--no-dashboard", action="store_true",
                     help="don't serve the live web dashboard during the run")
     sp.add_argument("--no-watch", action="store_true",

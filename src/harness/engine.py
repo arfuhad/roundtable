@@ -169,7 +169,21 @@ class Engine:
 
             # Task Agent (its own choosable agent + model) executes -> result.md
             agent = TaskAgent(self.provider, task.runner, self.temp)
-            result = await agent.execute(plan.goal, phase, task, task_def, deps)
+            
+            result = ""
+            for attempt in range(3):
+                result = await agent.execute(plan.goal, phase, task, task_def, deps)
+                s = result.strip()
+                if s and not s.lower().startswith("error:") and not s.lower().startswith("exception:"):
+                    break
+                
+                self.store.record_event(
+                    "task_retry", message=f"task {task.id} returned suspicious output, retrying",
+                    phase_id=phase.id, task_id=task.id,
+                )
+                if attempt < 2:
+                    await asyncio.sleep(1.0)
+                    
             self.store.write_result(phase, task, result)
 
             task.status = Status.done

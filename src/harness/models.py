@@ -12,6 +12,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .errors import HarnessError
+
 
 class Status(str, Enum):
     pending = "pending"
@@ -127,7 +129,7 @@ class Phase(BaseModel):
         for t in self.tasks:
             for dep in t.depends_on:
                 if dep not in by_id:
-                    raise ValueError(
+                    raise HarnessError(
                         f"task {t.id!r} depends on unknown task {dep!r} in phase {self.id!r}"
                     )
         ordered: list[Task] = []
@@ -138,7 +140,7 @@ class Phase(BaseModel):
             if t.id in seen:
                 return
             if t.id in visiting:
-                raise ValueError(f"dependency cycle detected at task {t.id!r}")
+                raise HarnessError(f"dependency cycle detected at task {t.id!r}")
             visiting.add(t.id)
             for dep in t.depends_on:
                 visit(by_id[dep])
@@ -164,11 +166,11 @@ class Plan(BaseModel):
     def _check_unique_ids(self) -> Plan:
         pids = [p.id for p in self.phases]
         if len(pids) != len(set(pids)):
-            raise ValueError("duplicate phase ids in plan")
+            raise HarnessError("duplicate phase ids in plan")
         for p in self.phases:
             tids = [t.id for t in p.tasks]
             if len(tids) != len(set(tids)):
-                raise ValueError(f"duplicate task ids in phase {p.id!r}")
+                raise HarnessError(f"duplicate task ids in phase {p.id!r}")
             # Validate dependency graph eagerly (raises on cycles / unknown deps).
             p.topological_order()
         return self

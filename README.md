@@ -95,6 +95,7 @@ renders the terminal `watch` view inline as it works — no second terminal need
 
 ```bash
 harness run                  # runs + shows progress; dashboard link printed at the top
+harness run --approve        # auto-approve the plan before running
 harness run --no-watch       # run without the inline terminal view
 harness run --no-dashboard   # run without serving the web dashboard
 harness run --port 9000      # pin the run's dashboard port (default: a free port)
