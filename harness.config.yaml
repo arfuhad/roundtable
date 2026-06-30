@@ -1,0 +1,56 @@
+# llm-harness configuration.
+
+# Backend:
+#   cli      -> reach other LLMs through their terminal CLIs (default)
+#   litellm  -> direct API calls (model = litellm string, needs API keys)
+#   scripted -> deterministic offline backend (demo/tests, no network)
+provider: cli
+
+# Choosable (agent, model) per role. `agent` names an entry in `agents` below;
+# `model` is passed to that agent's {model} placeholder. Mix CLIs and models
+# freely per role -- e.g. main on claude/opus, phase on antigravity/gemini,
+# tasks on opencode. Per-phase and per-task `runner` entries in the generated
+# plan override these. (With provider: litellm, `model` is the litellm string
+# -- openai/gpt-4o, anthropic/claude-3-5-sonnet-latest, ... -- and `agent` is
+# ignored.) Shorthand `agent:model` strings work too.
+models:
+  # planner: { agent: claude,      model: opus }
+  # main:    { agent: claude,      model: opus }
+  # phase:   { agent: antigravity, model: gemini-3.5-flash }
+  # task:    { agent: opencode,    model: opencode/mimo-v2.5-free }
+  planner: { agent: antigravity,      model: claude-opus-4-6 }
+  main:    { agent: antigravity,      model: claude-opus-4-6 }
+  phase:   { agent: antigravity, model: gemini-3.5-flash }
+  task:    { agent: opencode,    model: opencode-go/mimo-v2.5-pro }
+
+# Terminal commands for provider: cli. argv lists (no shell). Tokens may use
+# {prompt}, {system} and {model}; {model} is replaced with the role/task's
+# chosen model so one command serves many models. If {system} is absent it is
+# prepended to the prompt. Set stdin: true to pipe the prompt on stdin instead
+# of via {prompt}. Add whatever flags your tool needs to run non-interactively
+# and edit files (these flags are illustrative -- check each tool's own docs).
+# Optional models_command lists that CLI's models; `harness init` / `harness
+# agents` runs it so you can see what to assign above.
+agents:
+  claude:
+    command: ["claude", "-p", "{prompt}", "--model", "{model}"]
+  codex:
+    command: ["codex", "exec", "--model", "{model}", "{prompt}"]
+  # Antigravity CLI (formerly the Gemini CLI; binary is `agy`), runs Gemini models.
+  antigravity:
+    command: ["agy", "-p", "{prompt}", "--model", "{model}"]
+    models_command: ["agy", "models"]
+  opencode:
+    command: ["opencode", "run", "--model", "{model}", "{prompt}"]
+    models_command: ["opencode", "models"]
+  ollama:
+    command: ["ollama", "run", "{model}"]
+    models_command: ["ollama", "list"]
+    stdin: true
+
+defaults:
+  temperature: 0.2
+  max_concurrency: 1   # raise to run independent tasks in a phase concurrently
+                       # (keep at 1 when file-editing agents might touch the same files)
+  max_retries: 1       # retries on a failing/timed-out agent call
+  timeout: 900         # seconds per agent call

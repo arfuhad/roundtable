@@ -9,6 +9,7 @@
     harness plan    --plan FILE           ingest an existing plan (JSON or doc)
     harness approve                       approve the plan (the human gate)
     harness run                           execute all phases autonomously
+                                          (live web dashboard + inline progress)
     harness status                        show phase/task progress
     harness dashboard                     live web dashboard (stdlib http.server)
     harness watch                         live terminal dashboard
@@ -25,6 +26,7 @@ import argparse
 import asyncio
 import datetime as _dt
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -260,8 +262,64 @@ def cmd_run(args: argparse.Namespace) -> int:
     store = Store(root)
     provider = build_provider(config, root)
     engine = Engine(store, config, provider)
-    plan = asyncio.run(engine.run())
-    print(f"run complete: {len(plan.phases)} phase(s), status={plan.status.value}")
+    return asyncio.run(_run_with_progress(engine, store, args))
+
+
+async def _run_with_progress(engine: Engine, store: Store, args: argparse.Namespace) -> int:
+    """Drive the engine while showing live progress: a web dashboard link up front
+    and the terminal ``watch`` view rendered inline (TTY only)."""
+    live = sys.stdout.isatty() and not args.no_watch
+
+    # Serve the web dashboard in a background thread so the link is live as the run
+    # goes. Port 0 picks a free port, side-stepping any port collision.
+    httpd = url = None
+    if not args.no_dashboard:
+        try:
+            httpd, url = make_server(store, host=args.host, port=args.port)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            if args.open:
+                import webbrowser
+                webbrowser.open(url)
+        except HarnessError as e:
+            print(f"(web dashboard unavailable: {e})", file=sys.stderr)
+
+    def banner() -> str:
+        web = f"dashboard: {url}" if url else "dashboard: off (--no-dashboard)"
+        return f"{web}    ·    Ctrl-C to stop (resumable)"
+
+    print(banner())  # show the link immediately, before the first render
+
+    task = asyncio.create_task(engine.run())
+    try:
+        if live:
+            while not task.done():
+                try:
+                    frame = render_text(build_state(store))
+                except Exception:  # transient read during an engine write
+                    frame = "loading…"
+                sys.stdout.write("\x1b[2J\x1b[H" + banner() + "\n\n" + frame + "\n")
+                sys.stdout.flush()
+                await asyncio.sleep(max(0.1, args.interval))
+        plan = await task  # awaits completion; re-raises any engine error
+    except KeyboardInterrupt:
+        task.cancel()
+        try:
+            await task
+        except BaseException:
+            pass
+        print("\ninterrupted — re-run `harness run` to resume", file=sys.stderr)
+        return 130
+    finally:
+        if httpd:
+            httpd.shutdown()
+            httpd.server_close()
+
+    if live:
+        try:
+            sys.stdout.write("\x1b[2J\x1b[H" + render_text(build_state(store)) + "\n")
+        except Exception:
+            pass
+    print(f"\nrun complete: {len(plan.phases)} phase(s), status={plan.status.value}")
     print(f"docs: {store.docs_dir}")
     return 0
 
@@ -367,8 +425,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--project", default=".")
     sp.set_defaults(func=cmd_approve)
 
-    sp = sub.add_parser("run", help="execute the approved plan")
+    sp = sub.add_parser("run", help="execute the approved plan (live progress + web dashboard)")
     sp.add_argument("--project", default=".")
+    sp.add_argument("--no-dashboard", action="store_true",
+                    help="don't serve the live web dashboard during the run")
+    sp.add_argument("--no-watch", action="store_true",
+                    help="don't render the live terminal view (just run)")
+    sp.add_argument("--interval", type=float, default=1.0,
+                    help="live terminal refresh seconds (default 1)")
+    sp.add_argument("--host", default="127.0.0.1", help="dashboard bind address")
+    sp.add_argument("--port", type=int, default=0,
+                    help="dashboard port (0 = pick a free port)")
+    sp.add_argument("--open", action="store_true", help="open the dashboard in a browser")
     sp.set_defaults(func=cmd_run)
 
     sp = sub.add_parser("status", help="show phase/task progress")

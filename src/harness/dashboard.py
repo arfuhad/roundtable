@@ -13,6 +13,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from .errors import HarnessError
 from .insights import build_state
 from .store import Store
 
@@ -46,9 +47,18 @@ def make_server(store: Store, *, host: str = "127.0.0.1", port: int = 8787) -> t
 
         do_HEAD = do_GET
 
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    try:
+        httpd = ThreadingHTTPServer((host, port), Handler)
+    except OSError as e:
+        raise HarnessError(
+            f"could not start the dashboard on {host}:{port} ({e.strerror or e}); "
+            f"the port is likely in use by another app — retry with "
+            f"`harness dashboard --port <other>` (e.g. 8899)"
+        ) from e
     bound_host, bound_port = httpd.server_address[0], httpd.server_address[1]
-    shown = "localhost" if bound_host in ("0.0.0.0", "127.0.0.1") else bound_host
+    # Show the explicit IPv4 loopback rather than "localhost": on dual-stack hosts
+    # "localhost" can resolve to ::1 first and miss this IPv4-bound server.
+    shown = "127.0.0.1" if bound_host in ("0.0.0.0", "127.0.0.1") else bound_host
     return httpd, f"http://{shown}:{bound_port}"
 
 

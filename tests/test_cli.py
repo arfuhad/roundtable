@@ -51,6 +51,7 @@ def test_cli_full_lifecycle(tmp_path, capsys):
     assert store.read_doc("OVERVIEW.md")
     assert store.read_doc("FINAL.md")
 
-    # status output mentions the goal
+    # status output mentions the goal; run surfaced a live dashboard link
     out = capsys.readouterr().out
     assert "Build a CLI todo app" in out
+    assert "dashboard: http://127.0.0.1:" in out

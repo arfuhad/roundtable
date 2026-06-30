@@ -90,9 +90,20 @@ is the `main` role), and `--max-files` / `--max-bytes` to size the digest.
 
 ## Watching a run live
 
+`harness run` is **live by default**: it prints a web dashboard link up front and
+renders the terminal `watch` view inline as it works — no second terminal needed.
+
+```bash
+harness run                  # runs + shows progress; dashboard link printed at the top
+harness run --no-watch       # run without the inline terminal view
+harness run --no-dashboard   # run without serving the web dashboard
+harness run --port 9000      # pin the run's dashboard port (default: a free port)
+```
+
 A run streams structured events to `.harness/runs/run.log`, and `plan.json` is the
 live source of truth — so a viewer just polls the files and stays decoupled from
-the engine. Two surfaces, both zero-dependency (stdlib only):
+the engine. You can also open the standalone surfaces (e.g. to watch from another
+machine), both zero-dependency (stdlib only):
 
 ```bash
 harness dashboard            # web UI at http://127.0.0.1:8787 (--open to launch a browser)
@@ -100,7 +111,7 @@ harness dashboard --host 0.0.0.0 --port 9000   # expose on your LAN
 harness watch                # live dashboard right in the terminal
 ```
 
-Run either in one terminal and `harness run` in another. They show overall
+These show overall
 progress, **what each agent is doing right now** (task, `agent:model`, elapsed),
 per-phase/task status, per-agent task counts + time, task durations (avg /
 slowest), and a rolling event timeline. The web dashboard polls `GET /api/state`

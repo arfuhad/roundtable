@@ -109,7 +109,7 @@ models:
   planner: { agent: claude,      model: opus }
   main:    { agent: claude,      model: opus }
   phase:   { agent: antigravity, model: gemini-3.5-flash }
-  task:    { agent: opencode,    model: mimo-v2.5-pro }
+  task:    { agent: opencode,    model: opencode/mimo-v2.5-free }
 
 # Terminal commands for provider: cli. argv lists (no shell). Tokens may use
 # {prompt}, {system} and {model}; {model} is replaced with the role/task's
