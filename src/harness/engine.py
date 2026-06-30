@@ -45,18 +45,24 @@ class Engine:
         self.store.scaffold_plan_tree(plan)
         plan.status = Status.in_progress
         self.store.save_plan(plan)
-        self.store.log_event("run started")
+        self.store.record_event(
+            "run_started", message="run started", goal=plan.goal,
+            phases=len(plan.phases), tasks=sum(len(p.tasks) for p in plan.phases),
+        )
 
         main = MainOrchestrator(self.provider, plan.main_runner, self.temp)
 
         if not self.store.read_doc("OVERVIEW.md"):
             overview = await main.kickoff(plan)
             self.store.write_doc("OVERVIEW.md", overview)
-            self.store.log_event("main kickoff -> docs/OVERVIEW.md")
+            self.store.record_event("kickoff", message="main kickoff -> docs/OVERVIEW.md")
 
         for phase in plan.phases:
             if phase.status == Status.done:
-                self.store.log_event(f"phase {phase.id} already done; skipping")
+                self.store.record_event(
+                    "phase_skipped", message=f"phase {phase.id} already done; skipping",
+                    phase_id=phase.id,
+                )
                 continue
             await self._run_phase(plan, phase, main)
 
@@ -64,7 +70,10 @@ class Engine:
         self.store.save_plan(plan)
         final = await main.finalize(plan)
         self.store.write_doc("FINAL.md", final)
-        self.store.log_event("run complete -> docs/FINAL.md")
+        self.store.record_event(
+            "run_done", message="run complete -> docs/FINAL.md",
+            phases=len(plan.phases), tasks=sum(len(p.tasks) for p in plan.phases),
+        )
         return plan
 
     # ------------------------------------------------------------------ #
@@ -72,7 +81,10 @@ class Engine:
         phase.status = Status.in_progress
         await self._save(plan)
         self.store.write_phase_md(phase, _phase_md(phase))
-        self.store.log_event(f"phase {phase.id} started")
+        self.store.record_event(
+            "phase_started", message=f"phase {phase.id} started",
+            phase_id=phase.id, index=phase.index, title=phase.title, runner=str(phase.runner),
+        )
 
         # Fresh Phase Orchestrator — its context lives only for this phase.
         po = PhaseOrchestrator(self.provider, phase.runner, self.temp)
@@ -83,7 +95,9 @@ class Engine:
         summary = await po.summarize(phase, ordered)
         self.store.write_phase_summary(phase, summary)
         phase.summary_path = str(self.store.phase_dir(phase) / "phase-summary.md")
-        self.store.log_event(f"phase {phase.id} summarized")
+        self.store.record_event(
+            "phase_summarized", message=f"phase {phase.id} summarized", phase_id=phase.id,
+        )
 
         # Context clean: Main receives ONLY the summary string.
         entry = await main.integrate_phase(plan.goal, phase, summary)
@@ -91,7 +105,10 @@ class Engine:
 
         phase.status = Status.done
         await self._save(plan)
-        self.store.log_event(f"phase {phase.id} done; docs updated")
+        self.store.record_event(
+            "phase_done", message=f"phase {phase.id} done; docs updated",
+            phase_id=phase.id, index=phase.index, title=phase.title,
+        )
         del po  # explicit: phase orchestrator + its task agents are discarded here
 
     async def _schedule(self, plan: Plan, phase: Phase, po: PhaseOrchestrator) -> dict[str, str]:
@@ -140,6 +157,11 @@ class Engine:
         async with sem:
             task.status = Status.in_progress
             await self._save(plan)
+            self.store.record_event(
+                "task_started", message=f"task {task.id} started",
+                phase_id=phase.id, task_id=task.id, title=task.title,
+                agent=task.runner.agent, model=task.runner.model,
+            )
 
             # Phase Orchestrator defines the task's work -> TASK.md
             task_def = await po.define_task(plan.goal, phase, task)
@@ -153,7 +175,11 @@ class Engine:
             task.status = Status.done
             task.result_path = str(self.store.task_dir(phase, task) / "result.md")
             await self._save(plan)
-            self.store.log_event(f"task {task.id} done (runner={task.runner})")
+            self.store.record_event(
+                "task_done", message=f"task {task.id} done",
+                phase_id=phase.id, task_id=task.id, title=task.title,
+                agent=task.runner.agent, model=task.runner.model,
+            )
             return result
 
     # ------------------------------------------------------------------ #

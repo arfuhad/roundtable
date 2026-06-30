@@ -177,11 +177,40 @@ class Store:
         return p.read_text() if p.exists() else ""
 
     # ---- event log -------------------------------------------------------
-    def log_event(self, message: str) -> None:
+    def record_event(self, event_type: str, message: str = "", **fields: object) -> None:
+        """Append one structured JSONL event to ``runs/run.log``.
+
+        ``type`` + ``fields`` (e.g. ``task_id``, ``agent``, ``model``) let the
+        dashboard reconstruct live activity and timings; ``msg`` stays
+        human-readable for tailing the log.
+        """
         self.runs_dir.mkdir(parents=True, exist_ok=True)
-        line = json.dumps({"ts": _utcnow(), "msg": message})
+        rec: dict[str, object] = {"ts": _utcnow(), "type": event_type}
+        if message:
+            rec["msg"] = message
+        rec.update(fields)
         with (self.runs_dir / "run.log").open("a") as f:
-            f.write(line + "\n")
+            f.write(json.dumps(rec) + "\n")
+
+    def log_event(self, message: str) -> None:
+        """Back-compat: a plain human log line (records as a ``log`` event)."""
+        self.record_event("log", message=message)
+
+    def read_events(self) -> list[dict]:
+        """All recorded events in order; malformed/partial lines are skipped."""
+        p = self.runs_dir / "run.log"
+        if not p.exists():
+            return []
+        events: list[dict] = []
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue  # a concurrent writer's partial last line
+        return events
 
 
 def render_plan_md(plan: Plan) -> str:

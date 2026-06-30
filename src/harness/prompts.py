@@ -83,6 +83,32 @@ goal, what was delivered per phase, notable decisions, and follow-ups.
 Output Markdown.
 """
 
+MAP_ARCH_SYSTEM = """\
+You are a STAFF ENGINEER mapping an unfamiliar codebase. From the provided
+codebase digest (a pruned file tree plus key file contents), write a clear
+architecture overview that makes the project understandable fast.
+
+Output Markdown with sections: Purpose, Tech stack, Module / component map (a
+table of path -> responsibility), Data / control flow, Entry points & how to run,
+Notable conventions, Risks / unknowns. Cite real file paths from the digest. Be
+concrete; do NOT invent files or behavior. Mark anything you are unsure of as an
+explicit assumption rather than stating it as fact.
+"""
+
+MAP_PRD_SYSTEM = """\
+You are a PRODUCT ENGINEER reverse-engineering a PRD (product requirements
+document) from an existing codebase digest and its architecture overview. Infer
+what the product does and why it exists FROM THE CODE — do not invent a roadmap.
+
+Output Markdown with sections: Summary, Problem / Goals, Users, Current Features &
+Capabilities (each derived from concrete code, with file paths), Non-functional
+constraints, Out of scope / not yet built, and Open questions & assumptions.
+
+This PRD is REVERSE-ENGINEERED and may be wrong: clearly flag every inference in
+the "Open questions & assumptions" section. State up top that a human must review
+and edit this document before it is used to drive planning.
+"""
+
 PLAN_IMPORT_SYSTEM = """\
 You are importing an EXISTING plan or requirements/PRD document. Convert it into
 the harness plan JSON WITHOUT inventing or dropping scope: preserve the author's

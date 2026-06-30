@@ -7,4 +7,4 @@ Task Agents, summarizes, and reports to Main, which maintains the docs.
 Every role's model is choosable via config or the plan manifest.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"

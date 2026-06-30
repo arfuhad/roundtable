@@ -66,6 +66,21 @@ def test_log_event_appends_jsonl(tmp_path):
     assert "ts" in json.loads(lines[1])
 
 
+def test_record_event_structured_and_read(tmp_path):
+    s = Store(tmp_path)
+    s.record_event("task_started", message="task p1-t1 started",
+                   task_id="p1-t1", agent="opencode", model="mimo-v2.5-pro")
+    s.log_event("plain")  # still works, recorded as a 'log' event
+    # a partial/garbage line must not break the reader
+    with (s.runs_dir / "run.log").open("a") as f:
+        f.write("{not valid json\n")
+
+    events = s.read_events()
+    assert [e["type"] for e in events] == ["task_started", "log"]
+    assert events[0]["task_id"] == "p1-t1" and events[0]["agent"] == "opencode"
+    assert events[1]["msg"] == "plain"
+
+
 def test_render_plan_md_contains_models_and_deps():
     md = render_plan_md(_plan())
     assert "Set Up" in md and "`m/phase`" in md and "`m/task`" in md

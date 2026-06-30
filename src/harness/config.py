@@ -106,8 +106,8 @@ provider: cli
 # -- openai/gpt-4o, anthropic/claude-3-5-sonnet-latest, ... -- and `agent` is
 # ignored.) Shorthand `agent:model` strings work too.
 models:
-  planner: { agent: claude,      model: opus-4.8 }
-  main:    { agent: claude,      model: opus-4.8 }
+  planner: { agent: claude,      model: opus }
+  main:    { agent: claude,      model: opus }
   phase:   { agent: antigravity, model: gemini-3.5-flash }
   task:    { agent: opencode,    model: mimo-v2.5-pro }
 

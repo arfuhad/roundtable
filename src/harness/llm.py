@@ -257,8 +257,12 @@ class CLIProvider:
             await proc.wait()
             raise TimeoutError(f"agent {model!r} timed out after {self.timeout}s")
         if proc.returncode != 0:
-            tail = err.decode("utf-8", "replace").strip()[-800:]
-            raise RuntimeError(f"agent {model!r} exited {proc.returncode}: {tail}")
+            # Many CLIs print the actual error to stdout, not stderr (e.g. claude's
+            # "model ... may not exist"), so surface whichever stream has content.
+            err_text = err.decode("utf-8", "replace").strip()
+            out_text = out.decode("utf-8", "replace").strip()
+            detail = (err_text or out_text or "(no output on stdout/stderr)")[-800:]
+            raise RuntimeError(f"agent {model!r} exited {proc.returncode}: {detail}")
         return out.decode("utf-8", "replace")
 
 
@@ -357,6 +361,19 @@ def default_responder(role: str, model: str, system: str, user: str, meta: dict[
     if role == "main_finalize":
         goal = meta.get("goal", "")
         return f"# Final report\n\n**Goal:** {goal}\n\nAll phases complete. See per-phase summaries.\n"
+    if role == "map_arch":
+        return (
+            "# Architecture overview\n\n## Purpose\nDeterministic offline mapping output.\n\n"
+            "## Module / component map\n| Path | Responsibility |\n| --- | --- |\n"
+            "| (scripted) | (offline backend) |\n\n## Risks / unknowns\n- Scripted output.\n"
+        )
+    if role == "map_prd":
+        return (
+            "# PRD (reverse-engineered)\n\n> Review and edit before planning.\n\n"
+            "## Summary\nDeterministic offline PRD output.\n\n"
+            "## Current Features & Capabilities\n- Offline scripted capability.\n\n"
+            "## Open questions & assumptions\n- All inferences are scripted placeholders.\n"
+        )
     return f"[scripted:{role}] {user[:120]}"
 
 

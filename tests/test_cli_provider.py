@@ -89,3 +89,12 @@ async def test_cli_provider_nonzero_exit_raises():
     provider = CLIProvider({"fail": AgentSpec(command=["false"])}, max_retries=0)
     with pytest.raises(RuntimeError, match="exited"):
         await provider.complete(model="fail", system="", user="x")
+
+
+async def test_cli_provider_surfaces_stdout_error_on_failure():
+    # CLIs that print their error to stdout (not stderr) then exit non-zero
+    # (e.g. claude's "model may not exist") must still show the reason.
+    spec = AgentSpec(command=["sh", "-c", "echo bad-model-message; exit 1"])
+    provider = CLIProvider({"agent": spec}, max_retries=0)
+    with pytest.raises(RuntimeError, match="bad-model-message"):
+        await provider.complete(agent="agent", model="x", system="", user="y")

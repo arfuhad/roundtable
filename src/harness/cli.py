@@ -3,12 +3,15 @@
     harness init    [dir]                 scaffold .harness/ + default config;
                                           lists installed CLIs and their models
     harness agents                        list configured agents + their models
+    harness map                           scan an existing project into docs + a PRD
     harness plan    --goal "..."          plan from a goal
     harness plan    --prd FILE            plan from a PRD / requirements file
     harness plan    --plan FILE           ingest an existing plan (JSON or doc)
     harness approve                       approve the plan (the human gate)
     harness run                           execute all phases autonomously
     harness status                        show phase/task progress
+    harness dashboard                     live web dashboard (stdlib http.server)
+    harness watch                         live terminal dashboard
 
 Designed to run *inside an existing project*: all harness artifacts live under
 ``.harness/`` and agents run with the project directory as their working dir, so
@@ -22,15 +25,19 @@ import argparse
 import asyncio
 import datetime as _dt
 import sys
+import time
 from pathlib import Path
 
-from .agents import Planner
+from .agents import Analyst, Planner
 from .config import Config, load_config, write_default_config
+from .dashboard import make_server
 from .discovery import AgentStatus, discover
 from .engine import Engine
 from .errors import HarnessError
+from .insights import build_state, render_text
 from .llm import CLIProvider, LiteLLMProvider, LLMProvider, ScriptedProvider
 from .models import AgentRef, Plan, Status
+from .scan import build_digest
 from .store import Store
 
 
@@ -116,6 +123,32 @@ async def make_plan(
     return plan
 
 
+async def map_project(
+    store: Store,
+    config: Config,
+    *,
+    target: Path,
+    analyst_model: str | None = None,
+    max_files: int = 400,
+    max_bytes: int = 60000,
+) -> tuple[str, str]:
+    """Scan ``target`` and write ARCHITECTURE.md + PRD.md to ``.harness/docs/``."""
+    provider = build_provider(config, target)  # cwd = scanned project
+    ref = AgentRef.model_validate(analyst_model) if analyst_model else config.models.main
+    store.scaffold()
+    digest = build_digest(target, max_files=max_files, max_total_bytes=max_bytes)
+    store.record_event(
+        "map_started", message=f"mapping {target}", target=str(target), digest_bytes=len(digest)
+    )
+    analyst = Analyst(provider, ref, config.defaults.temperature)
+    arch = await analyst.architecture(digest)
+    store.write_doc("ARCHITECTURE.md", arch)
+    prd = await analyst.prd(digest, arch)
+    store.write_doc("PRD.md", prd)
+    store.record_event("map_done", message="map complete", docs=["ARCHITECTURE.md", "PRD.md"])
+    return arch, prd
+
+
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
@@ -178,6 +211,23 @@ def cmd_agents(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_map(args: argparse.Namespace) -> int:
+    root = Path(args.project).resolve()
+    target = Path(args.target).resolve() if args.target else root
+    config = load_config(root)
+    store = Store(root)
+    asyncio.run(map_project(
+        store, config, target=target, analyst_model=args.model,
+        max_files=args.max_files, max_bytes=args.max_bytes,
+    ))
+    prd_path = store.docs_dir / "PRD.md"
+    print(f"mapped {target}")
+    print(f"wrote {store.docs_dir / 'ARCHITECTURE.md'} and {prd_path}")
+    print(f"review/edit {prd_path}, then: "
+          f"harness plan --prd {prd_path} --project {args.project}")
+    return 0
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     root = Path(args.project).resolve()
     config = load_config(root)
@@ -235,6 +285,44 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    store = Store(Path(args.project).resolve())
+    if not store.has_plan():
+        raise HarnessError("no plan to show; run `harness plan` first")
+    httpd, url = make_server(store, host=args.host, port=args.port)
+    print(f"dashboard live at {url}  (Ctrl-C to stop)")
+    print("watching .harness/ — run `harness run` in another terminal to see it update")
+    if args.open:
+        import webbrowser
+        webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopping dashboard")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    store = Store(Path(args.project).resolve())
+    if not store.has_plan():
+        raise HarnessError("no plan to watch; run `harness plan` first")
+    try:
+        while True:
+            state = build_state(store)
+            sys.stdout.write("\x1b[2J\x1b[H")  # clear screen + home
+            sys.stdout.write(render_text(state) + "\n")
+            sys.stdout.flush()
+            if state.get("status") == "done" and not args.follow:
+                break
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="harness", description="Multi-LLM planning & orchestration harness")
     sub = p.add_subparsers(dest="command", required=True)
@@ -255,6 +343,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp.set_defaults(func=cmd_agents)
 
+    sp = sub.add_parser("map", help="scan an existing project into outline docs + a PRD to confirm")
+    sp.add_argument("--project", default=".", help="harness root (where .harness/ lives)")
+    sp.add_argument("--target", default=None,
+                    help="codebase to scan (default: the project root)")
+    sp.add_argument("--model", default=None,
+                    help="override the analyst agent/model (default: the 'main' role)")
+    sp.add_argument("--max-files", type=int, default=400,
+                    help="max files to include in the scan digest (default 400)")
+    sp.add_argument("--max-bytes", type=int, default=60000,
+                    help="max total bytes of file contents in the digest (default 60000)")
+    sp.set_defaults(func=cmd_map)
+
     sp = sub.add_parser("plan", help="generate or import a plan")
     sp.add_argument("--goal", default=None, help="goal text")
     sp.add_argument("--prd", default=None, help="path to a PRD / requirements file")
@@ -274,6 +374,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("status", help="show phase/task progress")
     sp.add_argument("--project", default=".")
     sp.set_defaults(func=cmd_status)
+
+    sp = sub.add_parser("dashboard", help="serve a live web dashboard of the run")
+    sp.add_argument("--project", default=".")
+    sp.add_argument("--host", default="127.0.0.1", help="bind address (use 0.0.0.0 for LAN access)")
+    sp.add_argument("--port", type=int, default=8787)
+    sp.add_argument("--open", action="store_true", help="open the dashboard in a browser")
+    sp.set_defaults(func=cmd_dashboard)
+
+    sp = sub.add_parser("watch", help="live terminal dashboard of the run")
+    sp.add_argument("--project", default=".")
+    sp.add_argument("--interval", type=float, default=1.0, help="refresh seconds (default 1)")
+    sp.add_argument("--follow", action="store_true", help="keep watching after the run completes")
+    sp.set_defaults(func=cmd_watch)
     return p
 
 

@@ -63,6 +63,35 @@ class Planner:
         return Plan.model_validate(extract_json(raw))
 
 
+class Analyst:
+    """Maps an existing codebase: an architecture overview, then a PRD.
+
+    Both calls take the (already size-bounded) codebase digest from ``scan``.
+    The PRD call also gets the architecture overview for grounding.
+    """
+
+    def __init__(self, provider: LLMProvider, ref: AgentRef, temperature: float = 0.2):
+        self.provider, self.ref, self.temperature = provider, ref, temperature
+
+    async def architecture(self, digest: str) -> str:
+        user = f"CODEBASE DIGEST:\n{digest}\n\nWrite the architecture overview."
+        return await self.provider.complete(
+            model=self.ref.model, agent=self.ref.agent, system=prompts.MAP_ARCH_SYSTEM, user=user,
+            temperature=self.temperature, role="map_arch", meta={"digest_bytes": len(digest)},
+        )
+
+    async def prd(self, digest: str, architecture: str) -> str:
+        user = (
+            f"CODEBASE DIGEST:\n{digest}\n\n"
+            f"ARCHITECTURE OVERVIEW:\n{_truncate(architecture, 8000)}\n\n"
+            "Write the reverse-engineered PRD."
+        )
+        return await self.provider.complete(
+            model=self.ref.model, agent=self.ref.agent, system=prompts.MAP_PRD_SYSTEM, user=user,
+            temperature=self.temperature, role="map_prd", meta={"digest_bytes": len(digest)},
+        )
+
+
 class MainOrchestrator:
     def __init__(self, provider: LLMProvider, ref: AgentRef, temperature: float = 0.2):
         self.provider, self.ref, self.temperature = provider, ref, temperature

@@ -67,6 +67,46 @@ harness plan --plan old-plan.json  # ingest an existing plan (JSON in our schema
 harness plan --plan ROADMAP.md     # free-form plan/PRD -> structured into our schema by the planner
 ```
 
+### Mapping an existing project
+
+Don't have a PRD? Point `harness map` at an unfamiliar (brownfield) codebase and it
+scans the project into two docs under `.harness/docs/`: an `ARCHITECTURE.md` outline
+(purpose, stack, module map, data flow, how to run) and a **reverse-engineered**
+`PRD.md`. You confirm the PRD by reviewing/editing it, then feed it straight into
+planning:
+
+```bash
+harness map                                  # scan -> .harness/docs/ARCHITECTURE.md + PRD.md
+$EDITOR .harness/docs/PRD.md                 # the human confirmation: fix what's wrong
+harness plan --prd .harness/docs/PRD.md      # the confirmed PRD drives the plan
+harness approve && harness run
+```
+
+`map` builds a compact, provider-agnostic digest of the codebase (pruned file tree +
+key file contents), so it works on every backend; with `provider: cli` the analyst
+agent also reads the real files directly. Flags: `--target DIR` to scan a different
+directory than the project root, `--model agent:model` to override the analyst (default
+is the `main` role), and `--max-files` / `--max-bytes` to size the digest.
+
+## Watching a run live
+
+A run streams structured events to `.harness/runs/run.log`, and `plan.json` is the
+live source of truth — so a viewer just polls the files and stays decoupled from
+the engine. Two surfaces, both zero-dependency (stdlib only):
+
+```bash
+harness dashboard            # web UI at http://127.0.0.1:8787 (--open to launch a browser)
+harness dashboard --host 0.0.0.0 --port 9000   # expose on your LAN
+harness watch                # live dashboard right in the terminal
+```
+
+Run either in one terminal and `harness run` in another. They show overall
+progress, **what each agent is doing right now** (task, `agent:model`, elapsed),
+per-phase/task status, per-agent task counts + time, task durations (avg /
+slowest), and a rolling event timeline. The web dashboard polls `GET /api/state`
+(plain JSON) ~1s — point your own tooling at it too. No build step, no JS
+framework, no API keys.
+
 ## How "terminal access to other LLMs" works
 
 With `provider: cli`, each role is a **`{agent, model}` pair**: `agent` names an
@@ -194,7 +234,7 @@ my-project/
           result.md                # the agent's completed work
           output/                  # artifacts the agent produced
     docs/{OVERVIEW.md, PROGRESS.md, FINAL.md}   # maintained by the Main Orchestrator
-    runs/run.log                   # append-only JSONL event log
+    runs/run.log                   # append-only structured JSONL events (feeds the dashboard)
 ```
 
 Your own source files are never touched by the harness itself — only by the agents
@@ -221,12 +261,16 @@ you point at them.
 |---|---|
 | `harness/models.py`  | `AgentRef` + `Plan/Phase/Task/Subtask` models + graph validation |
 | `harness/config.py`  | `harness.config.yaml`: provider, role `{agent, model}` runners, `agents` map |
-| `harness/store.py`   | `.harness/` layout, manifest IO, all writers |
+| `harness/store.py`   | `.harness/` layout, manifest IO, structured event log, all writers |
 | `harness/llm.py`     | `LLMProvider` protocol; `CLIProvider` / `LiteLLMProvider` / `ScriptedProvider`; JSON extraction |
+| `harness/discovery.py` | detect installed CLIs + list their models (`init` / `agents`) |
+| `harness/insights.py`  | `build_state` analytics over `plan.json` + events; terminal rendering |
+| `harness/dashboard.py` | zero-dep web dashboard (stdlib `http.server` + `/api/state`) |
+| `harness/scan.py`    | stdlib codebase digest (pruned tree + key files) for `map` |
 | `harness/prompts.py` | per-role system prompts |
-| `harness/agents.py`  | `Planner`, `MainOrchestrator`, `PhaseOrchestrator`, `TaskAgent` |
+| `harness/agents.py`  | `Planner`, `Analyst`, `MainOrchestrator`, `PhaseOrchestrator`, `TaskAgent` |
 | `harness/engine.py`  | dependency scheduler + run loop + context-clean boundary |
-| `harness/cli.py`     | `init` / `plan` / `approve` / `run` / `status` |
+| `harness/cli.py`     | `init` / `agents` / `map` / `plan` / `approve` / `run` / `status` / `dashboard` / `watch` |
 
 ## Tests
 
