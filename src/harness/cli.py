@@ -1,0 +1,293 @@
+"""Command-line interface.
+
+    harness init    [dir]                 scaffold .harness/ + default config;
+                                          lists installed CLIs and their models
+    harness agents                        list configured agents + their models
+    harness plan    --goal "..."          plan from a goal
+    harness plan    --prd FILE            plan from a PRD / requirements file
+    harness plan    --plan FILE           ingest an existing plan (JSON or doc)
+    harness approve                       approve the plan (the human gate)
+    harness run                           execute all phases autonomously
+    harness status                        show phase/task progress
+
+Designed to run *inside an existing project*: all harness artifacts live under
+``.harness/`` and agents run with the project directory as their working dir, so
+they read and edit the real files. After ``plan``, review ``.harness/plan/PLAN.md``;
+``run`` refuses until ``approve``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import datetime as _dt
+import sys
+from pathlib import Path
+
+from .agents import Planner
+from .config import Config, load_config, write_default_config
+from .discovery import AgentStatus, discover
+from .engine import Engine
+from .errors import HarnessError
+from .llm import CLIProvider, LiteLLMProvider, LLMProvider, ScriptedProvider
+from .models import AgentRef, Plan, Status
+from .store import Store
+
+
+def build_provider(config: Config, cwd: Path | str | None = None) -> LLMProvider:
+    if config.provider == "cli":
+        return CLIProvider(
+            config.agents, cwd=cwd,
+            timeout=config.defaults.timeout, max_retries=config.defaults.max_retries,
+        )
+    if config.provider == "scripted":
+        return ScriptedProvider()
+    if config.provider == "litellm":
+        return LiteLLMProvider(max_retries=config.defaults.max_retries)
+    raise HarnessError(f"unknown provider {config.provider!r} (use 'cli', 'litellm', or 'scripted')")
+
+
+def _role_models(config: Config) -> dict[str, AgentRef]:
+    return {
+        "planner": config.models.planner,
+        "main": config.models.main,
+        "phase": config.models.phase,
+        "task": config.models.task,
+    }
+
+
+def _first_line(text: str, default: str = "") -> str:
+    for line in text.splitlines():
+        s = line.strip().lstrip("# ").strip()
+        if s:
+            return s[:120]
+    return default
+
+
+async def make_plan(
+    store: Store,
+    config: Config,
+    *,
+    goal: str | None = None,
+    prd_path: str | None = None,
+    plan_path: str | None = None,
+    planner_model: str | None = None,
+) -> Plan:
+    roles = _role_models(config)
+    allowed = sorted({str(r) for r in roles.values()})
+    provider = build_provider(config, store.root)
+    planner_ref = AgentRef.model_validate(planner_model) if planner_model else roles["planner"]
+    planner = Planner(provider, planner_ref, config.defaults.temperature)
+
+    source_text = ""
+    if plan_path:
+        source_text = Path(plan_path).read_text()
+        try:
+            plan = Plan.model_validate_json(source_text)  # already in our schema -> no LLM
+        except Exception:
+            plan = await planner.structure_plan(source_text, allowed, roles)  # convert via LLM
+    elif prd_path or goal:
+        prd_text = Path(prd_path).read_text() if prd_path else ""
+        source_text = prd_text
+        combined = "\n\n".join(x for x in [goal or "", prd_text] if x).strip()
+        plan = await planner.create_plan(combined, allowed, roles)
+    else:
+        raise HarnessError("nothing to plan from: pass --goal, --prd, or --plan")
+
+    # Backfill metadata + role defaults; normalize indices; re-validate the graph.
+    if goal:
+        plan.goal = goal.strip()
+    if not plan.goal:
+        plan.goal = _first_line(source_text, "(imported plan)")
+    plan.created_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    plan.main_runner = plan.main_runner or roles["main"]
+    plan.runners = roles
+    for i, phase in enumerate(plan.phases, start=1):
+        phase.index = i
+        phase.runner = phase.runner or roles["phase"]
+        for task in phase.tasks:
+            task.runner = task.runner or roles["task"]
+    plan = Plan.model_validate(plan.model_dump())  # re-run validators after edits
+
+    store.scaffold()
+    store.write_brief(plan.goal if not source_text else source_text)
+    store.save_plan(plan)
+    store.write_plan_md(plan)
+    return plan
+
+
+# --------------------------------------------------------------------------- #
+# Commands
+# --------------------------------------------------------------------------- #
+def _print_agents(statuses: list[AgentStatus], *, limit: int | None = None) -> None:
+    if not statuses:
+        print("  (no agents configured)")
+        return
+    for st in sorted(statuses, key=lambda s: (not s.installed, s.name)):
+        if not st.installed:
+            print(f"  [ ] {st.name}  ({st.binary}) — not on PATH")
+        elif st.models:
+            shown = st.models if limit is None else st.models[:limit]
+            print(f"  [x] {st.name}  ({st.binary}) — {len(st.models)} model(s):")
+            for m in shown:
+                print(f"          {m}")
+            if limit is not None and len(st.models) > limit:
+                print(f"          … (+{len(st.models) - limit} more — run `harness agents`)")
+        else:
+            print(f"  [x] {st.name}  ({st.binary}) — models: n/a ({st.note})")
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    root = Path(args.dir).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    store = Store(root)
+    store.scaffold()
+    cfg_path = root / "harness.config.yaml"
+    if cfg_path.exists() and not args.force:
+        print(f"config already exists: {cfg_path} (use --force to overwrite)")
+    else:
+        write_default_config(root)
+        print(f"wrote {cfg_path}")
+    print(f"initialized harness in {root} (artifacts under {store.base})")
+
+    config = load_config(root)
+    if config.provider == "cli" and not args.no_models:
+        print("\navailable agents & models (probing installed CLIs — Ctrl-C or --no-models to skip):")
+        statuses = asyncio.run(discover(config.agents, timeout=args.models_timeout))
+        _print_agents(statuses, limit=8)
+        print("\nassign an agent:model to each role in harness.config.yaml under `models:`.")
+
+    print("next: edit harness.config.yaml, then `harness plan --goal \"...\"` "
+          "(or --prd FILE / --plan FILE)")
+    return 0
+
+
+def cmd_agents(args: argparse.Namespace) -> int:
+    root = Path(args.project).resolve()
+    config = load_config(root)
+    if config.provider != "cli":
+        print(f"provider is {config.provider!r}; agent discovery applies to `provider: cli`.")
+        return 0
+    statuses = asyncio.run(discover(config.agents, timeout=args.timeout))
+    if args.json:
+        from dataclasses import asdict
+        import json
+        print(json.dumps([asdict(s) for s in statuses], indent=2))
+    else:
+        _print_agents(statuses, limit=None)
+    return 0
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    root = Path(args.project).resolve()
+    config = load_config(root)
+    store = Store(root)
+    plan = asyncio.run(make_plan(
+        store, config, goal=args.goal, prd_path=args.prd, plan_path=args.plan,
+        planner_model=args.model,
+    ))
+    print(f"planned {len(plan.phases)} phase(s) for: {plan.goal}")
+    for p in plan.phases:
+        print(f"  [{p.id}] {p.title}  ({len(p.tasks)} task(s), runner={p.runner})")
+    print(f"\nwrote {store.manifest_path}")
+    print(f"review {store.plan_dir / 'PLAN.md'}, then: harness approve --project {args.project}")
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    root = Path(args.project).resolve()
+    store = Store(root)
+    plan = store.load_plan()
+    plan.approved = True
+    store.save_plan(plan)
+    print("plan approved. run it with: harness run --project", args.project)
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    root = Path(args.project).resolve()
+    config = load_config(root)
+    store = Store(root)
+    provider = build_provider(config, root)
+    engine = Engine(store, config, provider)
+    plan = asyncio.run(engine.run())
+    print(f"run complete: {len(plan.phases)} phase(s), status={plan.status.value}")
+    print(f"docs: {store.docs_dir}")
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    root = Path(args.project).resolve()
+    store = Store(root)
+    plan = store.load_plan()
+    mark = {
+        Status.done: "[x]", Status.in_progress: "[~]", Status.pending: "[ ]",
+        Status.failed: "[!]", Status.skipped: "[-]",
+    }
+    print(f"goal: {plan.goal}")
+    print(f"role runners: {({k: str(v) for k, v in plan.runners.items()})}")
+    print(f"approved: {plan.approved} | status: {plan.status.value}\n")
+    for p in plan.phases:
+        print(f"{mark[p.status]} Phase {p.index}: {p.title}  [{p.id}]")
+        for t in p.tasks:
+            dep = f" <- {','.join(t.depends_on)}" if t.depends_on else ""
+            print(f"    {mark[t.status]} {t.title}  [{t.id}] ({t.runner}){dep}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="harness", description="Multi-LLM planning & orchestration harness")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sp = sub.add_parser("init", help="scaffold .harness/ + default config")
+    sp.add_argument("dir", nargs="?", default=".")
+    sp.add_argument("--force", action="store_true", help="overwrite an existing config")
+    sp.add_argument("--no-models", action="store_true",
+                    help="skip probing installed CLIs for their model lists")
+    sp.add_argument("--models-timeout", type=float, default=15.0,
+                    help="seconds to wait per CLI when listing models (default 15)")
+    sp.set_defaults(func=cmd_init)
+
+    sp = sub.add_parser("agents", help="list configured agents, which are installed, and their models")
+    sp.add_argument("--project", default=".")
+    sp.add_argument("--timeout", type=float, default=20.0,
+                    help="seconds to wait per CLI when listing models (default 20)")
+    sp.add_argument("--json", action="store_true", help="machine-readable output")
+    sp.set_defaults(func=cmd_agents)
+
+    sp = sub.add_parser("plan", help="generate or import a plan")
+    sp.add_argument("--goal", default=None, help="goal text")
+    sp.add_argument("--prd", default=None, help="path to a PRD / requirements file")
+    sp.add_argument("--plan", default=None, help="path to an existing plan (JSON schema or free-form)")
+    sp.add_argument("--project", default=".")
+    sp.add_argument("--model", default=None, help="override the planner model/agent")
+    sp.set_defaults(func=cmd_plan)
+
+    sp = sub.add_parser("approve", help="approve the plan (human gate)")
+    sp.add_argument("--project", default=".")
+    sp.set_defaults(func=cmd_approve)
+
+    sp = sub.add_parser("run", help="execute the approved plan")
+    sp.add_argument("--project", default=".")
+    sp.set_defaults(func=cmd_run)
+
+    sp = sub.add_parser("status", help="show phase/task progress")
+    sp.add_argument("--project", default=".")
+    sp.set_defaults(func=cmd_status)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except HarnessError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

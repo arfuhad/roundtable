@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llm-harness"
+version = "0.1.0"
+description = "A multi-LLM planning and orchestration harness: plan -> phases -> tasks, driven by choosable models."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+litellm = ["litellm>=1.83"]   # only needed for `provider: litellm` (API access)
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "litellm>=1.83"]
+
+[project.scripts]
+harness = "harness.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
