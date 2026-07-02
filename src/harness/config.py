@@ -59,6 +59,7 @@ class AgentSpec(BaseModel):
 
     command: list[str]
     stdin: bool = False
+    pty: bool = False  # run in a pseudo-terminal so the CLI sees a real TTY
     models_command: list[str] | None = None
 
 
@@ -67,6 +68,7 @@ class Defaults(BaseModel):
     max_concurrency: int = Field(default=1, ge=1)
     max_retries: int = Field(default=1, ge=0)
     timeout: int = Field(default=900, ge=1)  # per agent call, seconds
+    hitl_timeout: int = Field(default=0, ge=0)  # seconds to wait for HITL approval; 0 = infinite
 
 
 # No-config fallback agents. Kept model-less so the bare-agent role defaults
@@ -87,6 +89,7 @@ class Config(BaseModel):
     models: ModelRoles = Field(default_factory=ModelRoles)
     agents: dict[str, AgentSpec] = Field(default_factory=lambda: dict(DEFAULT_AGENTS))
     defaults: Defaults = Field(default_factory=Defaults)
+    project_context: str = ""  # optional project context injected into agent prompts
 
 
 DEFAULT_CONFIG_YAML = """\

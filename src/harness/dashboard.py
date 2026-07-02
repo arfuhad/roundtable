@@ -101,7 +101,8 @@ PAGE = r"""<!doctype html>
   .tasks li { display: flex; align-items: center; gap: 8px; padding: 2px 0; color: #adbac7; }
   .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #30363d; }
   .s-done .dot { background: #3fb950; } .s-in_progress .dot { background: #58a6ff; animation: pulse 1s infinite; }
-  .s-failed .dot { background: #f85149; }
+  .s-failed .dot { background: #f85149; } .s-skipped .dot { background: #6e7681; opacity: .5; }
+  .s-waiting .dot { background: #d29922; animation: pulse 1.5s infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
   .tasks .id { color: #6e7681; } .tasks .meta2 { margin-left: auto; color: #6e7681; font-size: 12px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }

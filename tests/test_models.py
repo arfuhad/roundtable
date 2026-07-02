@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from harness.models import AgentRef, Phase, Plan, Status, Subtask, Task, slugify
+from harness.models import AgentRef, Phase, Plan, Status, Task, slugify
 from harness.errors import HarnessError
 
 
@@ -77,11 +77,38 @@ def test_duplicate_ids_rejected():
         ])])
 
 
+def test_cross_phase_dependency_on_earlier_phase_allowed():
+    plan = Plan(goal="g", phases=[
+        Phase(id="p1", index=1, title="One", tasks=[Task(id="p1-t1", title="A")]),
+        Phase(id="p2", index=2, title="Two",
+              tasks=[Task(id="p2-t1", title="B", depends_on=["p1-t1"])]),  # earlier phase
+    ])
+    assert plan.task_by_id("p2-t1")[1].depends_on == ["p1-t1"]
+
+
+def test_cross_phase_forward_reference_rejected():
+    # A phase-1 task may not depend on a phase-2 task (later phase).
+    with pytest.raises(HarnessError, match="later phase"):
+        Plan(goal="g", phases=[
+            Phase(id="p1", index=1, title="One",
+                  tasks=[Task(id="p1-t1", title="A", depends_on=["p2-t1"])]),
+            Phase(id="p2", index=2, title="Two", tasks=[Task(id="p2-t1", title="B")]),
+        ])
+
+
+def test_duplicate_task_id_across_phases_rejected():
+    # Task ids must be unique plan-wide so cross-phase deps resolve unambiguously.
+    with pytest.raises(HarnessError):
+        Plan(goal="g", phases=[
+            Phase(id="p1", index=1, title="One", tasks=[Task(id="dup", title="A")]),
+            Phase(id="p2", index=2, title="Two", tasks=[Task(id="dup", title="B")]),
+        ])
+
+
 def test_plan_roundtrip_and_lookup():
     plan = Plan(goal="g", main_runner="m", phases=[
         Phase(id="p1", index=1, title="P", runner="pm", tasks=[
-            Task(id="p1-t1", title="T", runner="tm",
-                 subtasks=[Subtask(id="p1-t1-s1", description="s")]),
+            Task(id="p1-t1", title="T", runner="tm"),
         ]),
     ])
     restored = Plan.model_validate_json(plan.model_dump_json())

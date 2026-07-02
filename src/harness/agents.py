@@ -7,11 +7,12 @@ role and return the produced text (Markdown, or JSON for the planner).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Callable
 
 from . import prompts
 from .llm import LLMProvider, extract_json
 from .models import AgentRef, Phase, Plan, Task
+from .prompts import render_prompt
 
 
 def _truncate(text: str, limit: int = 4000) -> str:
@@ -131,18 +132,49 @@ class PhaseOrchestrator:
     def __init__(self, provider: LLMProvider, ref: AgentRef, temperature: float = 0.2):
         self.provider, self.ref, self.temperature = provider, ref, temperature
 
-    async def define_task(self, goal: str, phase: Phase, task: Task) -> str:
-        subtasks = "\n".join(f"- {s.description}" for s in task.subtasks) or "(none)"
+    async def define_task(self, goal: str, phase: Phase, task: Task, *, project_context: str = "") -> str:
         user = (
             f"PROJECT GOAL:\n{goal}\n\nPHASE: {phase.title} — {phase.objective}\n\n"
-            f"TASK: {task.title}\nDESCRIPTION: {task.description}\nSUBTASKS:\n{subtasks}\n\n"
+            f"TASK: {task.title}\nDESCRIPTION: {task.description}\n\n"
             "Write the work definition."
         )
+        system = render_prompt(prompts.PHASE_DEFINE_SYSTEM, project_context=project_context)
         return await self.provider.complete(
-            model=self.ref.model, agent=self.ref.agent, system=prompts.PHASE_DEFINE_SYSTEM, user=user,
+            model=self.ref.model, agent=self.ref.agent, system=system, user=user,
             temperature=self.temperature, role="phase_define",
             meta={"task_title": task.title, "phase_title": phase.title},
         )
+
+    async def replan(
+        self,
+        phase: Phase,
+        failed_task: Task,
+        failure_output: str,
+        remaining: list[Task],
+    ) -> dict[str, str]:
+        """After a task failure, return updated descriptions for remaining tasks."""
+        remaining_lines = "\n".join(f"- [{t.id}] {t.title}: {t.description}" for t in remaining)
+        user = (
+            f"PHASE: {phase.title} — {phase.objective}\n\n"
+            f"FAILED TASK: [{failed_task.id}] {failed_task.title}\n"
+            f"FAILURE OUTPUT:\n{_truncate(failure_output, 1000)}\n\n"
+            f"REMAINING TASKS:\n{remaining_lines}\n\n"
+            "Return a JSON object mapping task_id to updated description for tasks "
+            "that need adjustment. Return {{}} if no changes are needed."
+        )
+        raw = await self.provider.complete(
+            model=self.ref.model, agent=self.ref.agent,
+            system=prompts.PHASE_REPLAN_SYSTEM, user=user,
+            json_mode=True, temperature=self.temperature, role="phase_replan",
+            meta={"phase_title": phase.title, "failed_task_id": failed_task.id},
+        )
+        try:
+            result = extract_json(raw)
+        except ValueError:
+            return {}
+        if not isinstance(result, dict):  # a model may return a list; ignore it
+            return {}
+        return {k: v for k, v in result.items() if isinstance(k, str) and isinstance(v, str)}
 
     async def summarize(self, phase: Phase, results: list[tuple[Task, str]]) -> str:
         body = "\n\n".join(
@@ -164,7 +196,8 @@ class TaskAgent:
         self.provider, self.ref, self.temperature = provider, ref, temperature
 
     async def execute(
-        self, goal: str, phase: Phase, task: Task, task_def: str, deps: list[tuple[Task, str]]
+        self, goal: str, phase: Phase, task: Task, task_def: str, deps: list[tuple[Task, str]],
+        *, project_context: str = "", on_output: Callable[[str], None] | None = None,
     ) -> str:
         deps_ctx = (
             "\n\n".join(f"### Dependency {t.title} [{t.id}]\n{_truncate(r, 1200)}" for t, r in deps)
@@ -176,8 +209,10 @@ class TaskAgent:
             f"WORK DEFINITION:\n{task_def}\n\nUPSTREAM RESULTS:\n{deps_ctx}\n\n"
             "Execute the task and produce the deliverable."
         )
+        system = render_prompt(prompts.TASK_EXEC_SYSTEM, project_context=project_context)
         return await self.provider.complete(
-            model=self.ref.model, agent=self.ref.agent, system=prompts.TASK_EXEC_SYSTEM, user=user,
+            model=self.ref.model, agent=self.ref.agent, system=system, user=user,
             temperature=self.temperature, role="task_exec",
             meta={"task_title": task.title, "phase_title": phase.title},
+            on_output=on_output,
         )

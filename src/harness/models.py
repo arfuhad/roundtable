@@ -1,4 +1,4 @@
-"""Plan data model: Plan -> Phase -> Task -> Subtask.
+"""Plan data model: Plan -> Phase -> Task.
 
 The plan manifest (``plan.json``) is the source of truth for status, model
 assignments, and task dependencies. These pydantic models (de)serialize it and
@@ -18,6 +18,7 @@ from .errors import HarnessError
 class Status(str, Enum):
     pending = "pending"
     in_progress = "in_progress"
+    waiting = "waiting"
     done = "done"
     failed = "failed"
     skipped = "skipped"
@@ -72,12 +73,6 @@ def slugify(text: str, max_len: int = 40) -> str:
     return s or "item"
 
 
-class Subtask(BaseModel):
-    id: str
-    description: str
-    status: Status = Status.pending
-
-
 class Task(BaseModel):
     id: str
     title: str
@@ -85,9 +80,10 @@ class Task(BaseModel):
     description: str = ""
     runner: AgentRef = Field(default_factory=AgentRef)  # choosable (agent, model) for this task; backfilled if empty
     depends_on: list[str] = Field(default_factory=list)
-    subtasks: list[Subtask] = Field(default_factory=list)
     status: Status = Status.pending
     result_path: str | None = None
+    validate_command: list[str] | None = None  # run after execution; non-zero exit = failure
+    requires_approval: bool = False  # pause and wait for `harness resume` before executing
 
     @model_validator(mode="after")
     def _default_slug(self) -> Task:
@@ -120,15 +116,19 @@ class Phase(BaseModel):
     def task_dir_name(self, task: Task, task_index: int) -> str:
         return f"task-{task_index:02d}-{task.slug}"
 
-    def topological_order(self) -> list[Task]:
-        """Tasks ordered so dependencies precede dependents.
+    def topological_order(self, external_ids: set[str] | None = None) -> list[Task]:
+        """Tasks ordered so intra-phase dependencies precede dependents.
 
-        Raises ValueError on unknown dep ids or cycles.
+        ``external_ids`` are task ids defined in *other* phases that this phase's
+        tasks may depend on (cross-phase deps). They are treated as already
+        satisfied and don't participate in intra-phase ordering. Raises
+        HarnessError on unknown dep ids or intra-phase cycles.
         """
+        external_ids = external_ids or set()
         by_id = {t.id: t for t in self.tasks}
         for t in self.tasks:
             for dep in t.depends_on:
-                if dep not in by_id:
+                if dep not in by_id and dep not in external_ids:
                     raise HarnessError(
                         f"task {t.id!r} depends on unknown task {dep!r} in phase {self.id!r}"
                     )
@@ -143,7 +143,8 @@ class Phase(BaseModel):
                 raise HarnessError(f"dependency cycle detected at task {t.id!r}")
             visiting.add(t.id)
             for dep in t.depends_on:
-                visit(by_id[dep])
+                if dep in by_id:  # only intra-phase deps affect ordering
+                    visit(by_id[dep])
             visiting.discard(t.id)
             seen.add(t.id)
             ordered.append(t)
@@ -167,12 +168,29 @@ class Plan(BaseModel):
         pids = [p.id for p in self.phases]
         if len(pids) != len(set(pids)):
             raise HarnessError("duplicate phase ids in plan")
-        for p in self.phases:
-            tids = [t.id for t in p.tasks]
-            if len(tids) != len(set(tids)):
-                raise HarnessError(f"duplicate task ids in phase {p.id!r}")
-            # Validate dependency graph eagerly (raises on cycles / unknown deps).
-            p.topological_order()
+        # Task ids are unique across the WHOLE plan — cross-phase deps reference
+        # tasks by id, so ids must be globally resolvable. Phase list order is the
+        # execution order; a dep may only reference the same or an earlier phase.
+        all_ids: set[str] = set()
+        task_phase_pos: dict[str, int] = {}
+        for i, p in enumerate(self.phases):
+            for t in p.tasks:
+                if t.id in all_ids:
+                    raise HarnessError(f"duplicate task id {t.id!r} in plan")
+                all_ids.add(t.id)
+                task_phase_pos[t.id] = i
+        for i, p in enumerate(self.phases):
+            # Intra-phase cycle check; cross-phase ids are allowed as externals.
+            p.topological_order(external_ids=all_ids)
+            for t in p.tasks:
+                for dep in t.depends_on:
+                    if dep not in all_ids:
+                        raise HarnessError(f"task {t.id!r} depends on unknown task {dep!r}")
+                    if task_phase_pos[dep] > i:
+                        raise HarnessError(
+                            f"task {t.id!r} depends on {dep!r} in a later phase; "
+                            "cross-phase dependencies must reference an earlier phase"
+                        )
         return self
 
     def task_by_id(self, task_id: str) -> tuple[Phase, Task] | None:

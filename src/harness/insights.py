@@ -15,7 +15,7 @@ from typing import Any
 from .models import Status
 from .store import Store
 
-_MARK = {"done": "x", "in_progress": "~", "pending": " ", "failed": "!", "skipped": "-"}
+_MARK = {"done": "x", "in_progress": "~", "pending": " ", "failed": "!", "skipped": "-", "waiting": "?"}
 
 
 def _parse(ts: str | None) -> _dt.datetime | None:
@@ -60,7 +60,7 @@ def build_state(store: Store, *, event_limit: int = 40) -> dict[str, Any]:
                 duration[tid] = (b - a).total_seconds()
 
     totals = {"phases": len(plan.phases), "tasks": 0,
-              "done": 0, "in_progress": 0, "pending": 0, "failed": 0, "skipped": 0}
+              "done": 0, "in_progress": 0, "pending": 0, "failed": 0, "skipped": 0, "waiting": 0}
     by_agent: dict[str, dict[str, float]] = {}
     durations: list[tuple[str, float]] = []
     now_running: list[dict[str, Any]] = []

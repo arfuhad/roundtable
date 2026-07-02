@@ -4,11 +4,12 @@ The engine runs for real; only the LLM transport is deterministic. Sentinels in
 the scripted outputs let us assert the orchestration contract precisely.
 """
 
+import asyncio
 import json
 
 import pytest
 
-from harness.config import Config
+from harness.config import Config, Defaults
 from harness.engine import Engine
 from harness.errors import HarnessError
 from harness.llm import ScriptedProvider
@@ -164,3 +165,175 @@ async def test_resume_skips_completed_tasks(tmp_path):
     assert "PRE-DONE-ALPHA" in beta_exec["user"]
     # Alpha's result file untouched.
     assert (store.task_dir(plan.phases[0], alpha) / "result.md").read_text() == "PRE-DONE-ALPHA"
+
+
+def _failing_responder(fail_title: str):
+    """Responder that raises (like a non-zero CLI exit) for one task's execution."""
+    def responder(role, model, system, user, meta):
+        if role == "task_exec" and meta.get("task_title") == fail_title:
+            raise RuntimeError(f"agent {model!r} exited 1: simulated failure")
+        return sentinel_responder(role, model, system, user, meta)
+    return responder
+
+
+async def test_task_failure_skips_dependents_and_fails_run(tmp_path):
+    # Task A fails; B depends on A (must be skipped, never executed); phase 1 fails.
+    # Phase 2 is independent, so it still runs — but the overall run is failed.
+    provider = ScriptedProvider(_failing_responder("Task A"))
+    store = Store(tmp_path)
+    await _make_approved_plan(store, provider)
+    cfg = Config(defaults=Defaults(max_retries=0))  # 1 attempt, no retry backoff sleeps
+
+    plan = await Engine(store, cfg, provider).run()
+
+    p1, p2 = plan.phases
+    tA, tB = p1.tasks
+    (tC,) = p2.tasks
+
+    # Failure propagation
+    assert tA.status == Status.failed
+    assert tB.status == Status.skipped     # dependent of a failed task
+    assert p1.status == Status.failed
+    # Independent phase still completes
+    assert tC.status == Status.done
+    assert p2.status == Status.done
+    # Overall run failed; finalize skipped (no FINAL.md)
+    assert plan.status == Status.failed
+    assert store.read_doc("FINAL.md") == ""
+    # Failed task records an error result; dependent never executed
+    assert (store.task_dir(p1, tA) / "result.md").read_text().startswith("error:")
+    execs = [c["meta"]["task_title"] for c in provider.calls if c["role"] == "task_exec"]
+    assert "Task B" not in execs
+    assert "Task C" in execs
+    # Structured events emitted for the failure lifecycle
+    types = {e["type"] for e in store.read_events()}
+    assert {"task_failed", "task_skipped", "phase_failed", "run_failed"} <= types
+
+
+async def test_validate_command_failure_marks_task_failed(tmp_path):
+    store = Store(tmp_path)
+    plan = Plan(goal="g", main_runner="m/main", phases=[
+        Phase(id="p1", index=1, title="P", runner="m/phase", tasks=[
+            Task(id="p1-t1", title="V", runner="m/task",
+                 validate_command=["sh", "-c", "exit 3"]),
+        ]),
+    ])
+    plan.approved = True
+    store.save_plan(plan)
+    cfg = Config(defaults=Defaults(max_retries=0))
+
+    plan = await Engine(store, cfg, ScriptedProvider(sentinel_responder)).run()
+
+    t = plan.phases[0].tasks[0]
+    assert t.status == Status.failed          # validation gate downgrades a passing exec
+    assert plan.status == Status.failed
+    types = {e["type"] for e in store.read_events()}
+    assert "task_validation_failed" in types
+    assert (store.task_dir(plan.phases[0], t) / "result.md").read_text().startswith("error:")
+
+
+async def test_hitl_approval_sets_waiting_then_resumes(tmp_path):
+    store = Store(tmp_path)
+    plan = Plan(goal="g", main_runner="m/main", phases=[
+        Phase(id="p1", index=1, title="P", runner="m/phase", tasks=[
+            Task(id="p1-t1", title="Gated", runner="m/task", requires_approval=True),
+        ]),
+    ])
+    plan.approved = True
+    store.save_plan(plan)
+
+    run_task = asyncio.create_task(
+        Engine(store, Config(), ScriptedProvider(sentinel_responder)).run()
+    )
+    cp = store.hitl_path("p1-t1")
+
+    # Wait for the engine to park the task at the approval gate.
+    for _ in range(200):
+        if cp.exists() and json.loads(cp.read_text()).get("status") == "waiting":
+            break
+        await asyncio.sleep(0.02)
+    else:  # pragma: no cover - only trips if the gate never engages
+        run_task.cancel()
+        pytest.fail("task never reached the waiting checkpoint")
+
+    # The task is visibly waiting, and the run has not completed.
+    assert store.load_plan().phases[0].tasks[0].status == Status.waiting
+    assert not run_task.done()
+    assert store.list_waiting_checkpoints()  # surfaced for `harness status`
+
+    # Approve it (as `harness resume` would) and let the run finish.
+    data = json.loads(cp.read_text())
+    data["status"] = "approved"
+    cp.write_text(json.dumps(data))
+
+    plan = await asyncio.wait_for(run_task, timeout=10)
+    assert plan.status == Status.done
+    assert plan.phases[0].tasks[0].status == Status.done
+    assert not cp.exists()  # checkpoint consumed
+
+
+async def test_replan_ignores_non_dict_model_output(tmp_path):
+    # A replanning model that returns a JSON array (not an object) must not crash;
+    # replan should degrade to "no changes".
+    from harness.agents import PhaseOrchestrator
+
+    def responder(role, model, system, user, meta):
+        if role == "phase_replan":
+            return "[1, 2, 3]"
+        return "?"
+
+    po = PhaseOrchestrator(ScriptedProvider(responder), AgentRef(agent="m/phase"))
+    phase = Phase(id="p1", index=1, title="P", runner="m/phase",
+                  tasks=[Task(id="p1-t1", title="A", runner="m/task")])
+    updates = await po.replan(phase, phase.tasks[0], "boom", [phase.tasks[0]])
+    assert updates == {}
+
+
+async def test_cross_phase_dependency_flows_result(tmp_path):
+    # A phase-2 task depends on a phase-1 task; it must receive that task's
+    # result as upstream context and the run must complete cleanly.
+    store = Store(tmp_path)
+    plan = Plan(goal="g", main_runner="m/main", phases=[
+        Phase(id="p1", index=1, title="Phase One", runner="m/phase",
+              tasks=[Task(id="p1-t1", title="Alpha", runner="m/task")]),
+        Phase(id="p2", index=2, title="Phase Two", runner="m/phase",
+              tasks=[Task(id="p2-t1", title="Beta", runner="m/task", depends_on=["p1-t1"])]),
+    ])
+    plan.approved = True
+    store.save_plan(plan)
+
+    provider = ScriptedProvider(sentinel_responder)
+    result = await Engine(store, Config(), provider).run()
+
+    assert result.status == Status.done
+    assert all(t.status == Status.done for ph in result.phases for t in ph.tasks)
+    # Beta (phase 2) saw Alpha's (phase 1) result flow across the phase boundary.
+    beta = next(c for c in provider.calls
+                if c["role"] == "task_exec" and c["meta"]["task_title"] == "Beta")
+    assert "SENTINEL::Alpha" in beta["user"]
+
+
+async def test_cross_phase_failed_dependency_skips_dependent(tmp_path):
+    # Phase-1 task fails; the phase-2 task that depends on it must be skipped
+    # (never executed), and the whole run must be marked failed.
+    store = Store(tmp_path)
+    plan = Plan(goal="g", main_runner="m/main", phases=[
+        Phase(id="p1", index=1, title="Phase One", runner="m/phase",
+              tasks=[Task(id="p1-t1", title="Alpha", runner="m/task")]),
+        Phase(id="p2", index=2, title="Phase Two", runner="m/phase",
+              tasks=[Task(id="p2-t1", title="Beta", runner="m/task", depends_on=["p1-t1"])]),
+    ])
+    plan.approved = True
+    store.save_plan(plan)
+    cfg = Config(defaults=Defaults(max_retries=0))
+
+    provider = ScriptedProvider(_failing_responder("Alpha"))
+    result = await Engine(store, cfg, provider).run()
+
+    assert result.phases[0].tasks[0].status == Status.failed
+    assert result.phases[1].tasks[0].status == Status.skipped   # cross-phase cascade
+    assert result.phases[1].status == Status.failed             # phase didn't complete
+    assert result.status == Status.failed
+    assert store.read_doc("FINAL.md") == ""
+    execs = [c["meta"]["task_title"] for c in provider.calls if c["role"] == "task_exec"]
+    assert "Beta" not in execs

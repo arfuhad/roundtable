@@ -56,10 +56,10 @@ def test_writers(tmp_path):
     assert s.read_doc("missing.md") == ""
 
 
-def test_log_event_appends_jsonl(tmp_path):
+def test_record_event_appends_jsonl(tmp_path):
     s = Store(tmp_path)
-    s.log_event("one")
-    s.log_event("two")
+    s.record_event("log", message="one")
+    s.record_event("log", message="two")
     lines = (s.runs_dir / "run.log").read_text().splitlines()
     assert len(lines) == 2
     assert json.loads(lines[0])["msg"] == "one"
@@ -70,7 +70,7 @@ def test_record_event_structured_and_read(tmp_path):
     s = Store(tmp_path)
     s.record_event("task_started", message="task p1-t1 started",
                    task_id="p1-t1", agent="opencode", model="mimo-v2.5-pro")
-    s.log_event("plain")  # still works, recorded as a 'log' event
+    s.record_event("log", message="plain")  # a plain human log line
     # a partial/garbage line must not break the reader
     with (s.runs_dir / "run.log").open("a") as f:
         f.write("{not valid json\n")

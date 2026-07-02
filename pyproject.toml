@@ -16,10 +16,12 @@ dependencies = [
 
 [project.optional-dependencies]
 litellm = ["litellm>=1.83"]   # only needed for `provider: litellm` (API access)
+mcp = ["mcp>=1.0"]            # only needed for `harness mcp` / `harness-mcp` server
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "litellm>=1.83"]
 
 [project.scripts]
 harness = "harness.cli:main"
+harness-mcp = "harness.mcp:run_server"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/harness"]

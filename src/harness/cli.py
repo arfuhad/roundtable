@@ -13,6 +13,7 @@
     harness status                        show phase/task progress
     harness dashboard                     live web dashboard (stdlib http.server)
     harness watch                         live terminal dashboard
+    harness mcp                           start the MCP server (stdio)
 
 Designed to run *inside an existing project*: all harness artifacts live under
 ``.harness/`` and agents run with the project directory as their working dir, so
@@ -117,6 +118,10 @@ async def make_plan(
         for task in phase.tasks:
             task.runner = task.runner or roles["task"]
     plan = Plan.model_validate(plan.model_dump())  # re-run validators after edits
+
+    archive_dir = store.archive_current_run()
+    if archive_dir:
+        print(f"archived previous run → {archive_dir.relative_to(store.root)}")
 
     store.scaffold()
     store.write_brief(plan.goal if not source_text else source_text)
@@ -260,17 +265,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     root = Path(args.project).resolve()
     config = load_config(root)
     store = Store(root)
-    
+
     if args.approve:
+        # Best-effort auto-approve; a missing/invalid plan is surfaced by the engine.
         try:
             plan = store.load_plan()
             if not plan.approved:
                 plan.approved = True
                 store.save_plan(plan)
                 print("plan auto-approved via --approve flag.")
-        except Exception:
-            pass # Engine will handle plan loading errors gracefully
-            
+        except (FileNotFoundError, HarnessError):
+            pass
+
     provider = build_provider(config, root)
     engine = Engine(store, config, provider)
     return asyncio.run(_run_with_progress(engine, store, args))
@@ -341,7 +347,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     plan = store.load_plan()
     mark = {
         Status.done: "[x]", Status.in_progress: "[~]", Status.pending: "[ ]",
-        Status.failed: "[!]", Status.skipped: "[-]",
+        Status.failed: "[!]", Status.skipped: "[-]", Status.waiting: "[?]",
     }
     print(f"goal: {plan.goal}")
     print(f"role runners: {({k: str(v) for k, v in plan.runners.items()})}")
@@ -374,6 +380,41 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_resume(args: argparse.Namespace) -> int:
+    import json as _json
+    root = Path(args.project).resolve()
+    store = Store(root)
+    checkpoint = store.hitl_path(args.task)
+    if not checkpoint.exists():
+        raise HarnessError(
+            f"no pending approval checkpoint for task {args.task!r}; "
+            f"is the run paused and waiting at that task?"
+        )
+    try:
+        data = _json.loads(checkpoint.read_text())
+    except (ValueError, OSError) as e:
+        raise HarnessError(f"could not read checkpoint for task {args.task!r}: {e}") from e
+    if data.get("status") != "waiting":
+        raise HarnessError(
+            f"task {args.task!r} checkpoint has status {data.get('status')!r}, expected 'waiting'"
+        )
+    data["status"] = "approved"
+    checkpoint.write_text(_json.dumps(data))
+    print(f"task {args.task!r} approved — run will continue")
+    return 0
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    try:
+        from .mcp import run_server
+    except ImportError:
+        print("error: 'mcp' package not installed — run: pip install 'llm-harness[mcp]'",
+              file=sys.stderr)
+        return 2
+    run_server()
+    return 0
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     store = Store(Path(args.project).resolve())
     if not store.has_plan():
@@ -394,6 +435,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="harness", description="Multi-LLM planning & orchestration harness")
+    p.add_argument("-v", "--verbose", action="store_true", help="enable verbose/debug logging")
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("init", help="scaffold .harness/ + default config")
@@ -467,11 +509,25 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--interval", type=float, default=1.0, help="refresh seconds (default 1)")
     sp.add_argument("--follow", action="store_true", help="keep watching after the run completes")
     sp.set_defaults(func=cmd_watch)
+
+    sp = sub.add_parser(
+        "resume",
+        help="approve a paused HITL task and let the run continue",
+    )
+    sp.add_argument("--task", required=True, help="task ID to approve (e.g. p1-t2)")
+    sp.add_argument("--project", default=".")
+    sp.set_defaults(func=cmd_resume)
+
+    sp = sub.add_parser("mcp", help="start the harness MCP server over stdio (requires mcp extra)")
+    sp.set_defaults(func=cmd_mcp)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    import logging
     args = build_parser().parse_args(argv)
+    level = logging.DEBUG if getattr(args, 'verbose', False) else logging.WARNING
+    logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
     try:
         return args.func(args)
     except HarnessError as e:

@@ -9,8 +9,9 @@ from __future__ import annotations
 PLANNER_SYSTEM = """\
 You are the PLANNER. Turn the user's goal into a complete, executable plan.
 
-Break the work into ordered PHASES. Each phase has granular TASKS; each task may
-have SUBTASKS. Tasks may depend on earlier tasks IN THE SAME PHASE.
+Break the work into ordered PHASES. Each phase has granular TASKS.
+Tasks may depend on earlier tasks in the SAME phase, or on tasks in an EARLIER
+phase (reference them by id) — never on a later phase.
 
 Output ONLY a single JSON object (no prose, no code fences) with this shape:
 {
@@ -27,8 +28,7 @@ Output ONLY a single JSON object (no prose, no code fences) with this shape:
           "title": "<short task title>",
           "description": "<concrete, actionable definition of the work>",
           "runner": {"agent": "<cli>", "model": "<model>"},
-          "depends_on": ["p1-..."],
-          "subtasks": [ {"id": "p1-t1-s1", "description": "<step>"} ]
+          "depends_on": ["p1-..."]
         }
       ]
     }
@@ -36,8 +36,9 @@ Output ONLY a single JSON object (no prose, no code fences) with this shape:
 }
 
 Rules:
-- ids: phases p1,p2,...; tasks <phase>-t1,<phase>-t2,...; subtasks <task>-s1,...
-- depends_on may ONLY reference task ids within the SAME phase; no cycles.
+- ids: phases p1,p2,...; tasks <phase>-t1,<phase>-t2,... (task ids unique plan-wide).
+- depends_on may reference task ids in the SAME phase or any EARLIER phase
+  (never a later phase); no cycles.
 - Each "runner" picks the CLI + model that runs that phase/task. Choose ONLY
   from the ALLOWED (agent:model) pairs provided: split each "agent:model" into
   {"agent": ..., "model": ...}. When unsure use the given role defaults.
@@ -48,15 +49,31 @@ PHASE_DEFINE_SYSTEM = """\
 You are a PHASE ORCHESTRATOR preparing one task for a sub-agent. Write a precise
 work definition the agent can execute without further questions.
 
-Output Markdown with sections: Objective, Steps, Inputs/Context, Acceptance
-criteria. Be concrete. Do not do the work yourself; define it.
-"""
+Output Markdown with sections:
+- **Objective**: What the task must achieve.
+- **Steps**: Numbered, concrete steps.
+- **Inputs/Context**: What the agent should read or reference.
+- **Expected Output Artifacts**: Specific files, sections, or deliverables the
+  agent must produce (not just "do the work" — name the artifact).
+- **Acceptance Criteria**: How to verify the work is correct.
+
+Be concrete. Do not do the work yourself; define it.
+{project_context}"""
 
 TASK_EXEC_SYSTEM = """\
-You are a TASK AGENT. Execute the given work definition and produce the actual
-deliverable. Output Markdown: a brief summary, then the concrete work product
-(code, content, analysis, etc.). State any assumptions and remaining risks.
-"""
+You are a TASK AGENT executing a work definition inside a project.
+
+Your working directory is the project root. You have access to the project's
+files and can read/edit them directly. Use the tools available to you (file
+editing, terminal commands, etc.) to complete the work.
+
+Output Markdown with:
+1. A brief summary of what you did.
+2. The concrete work product (code written/modified, content, analysis, etc.).
+3. Any assumptions made and remaining risks.
+
+If you cannot complete the work, explain clearly what went wrong and why.
+{project_context}"""
 
 PHASE_SUMMARY_SYSTEM = """\
 You are a PHASE ORCHESTRATOR. Summarize the completed phase for the MAIN
@@ -109,6 +126,19 @@ the "Open questions & assumptions" section. State up top that a human must revie
 and edit this document before it is used to drive planning.
 """
 
+PHASE_REPLAN_SYSTEM = """\
+You are a PHASE ORCHESTRATOR. A task in your phase has failed. Adapt the
+remaining tasks so the phase can still achieve its objective.
+
+Review the failed task and its output, then return a JSON object mapping task IDs
+(from the remaining tasks list) to updated descriptions. Only include tasks that
+genuinely need adjustment given the failure. Return an empty object if no changes
+are needed.
+
+Output ONLY a single JSON object (no prose, no code fences):
+{"<task_id>": "<updated description>", ...}
+"""
+
 PLAN_IMPORT_SYSTEM = """\
 You are importing an EXISTING plan or requirements/PRD document. Convert it into
 the harness plan JSON WITHOUT inventing or dropping scope: preserve the author's
@@ -126,16 +156,33 @@ Output ONLY a single JSON object (no prose, no code fences) with this shape:
         {
           "id": "p1-t1", "title": "...", "description": "...",
           "runner": {"agent": "<cli>", "model": "<model>"},
-          "depends_on": ["p1-..."],
-          "subtasks": [ {"id": "p1-t1-s1", "description": "..."} ]
+          "depends_on": ["p1-..."]
         }
       ]
     }
   ]
 }
 
-Rules: ids p1,p2,... and <phase>-t1,...; depends_on only within the same phase;
-no cycles; each "runner" picks a CLI + model ONLY from the ALLOWED (agent:model)
+Rules: ids p1,p2,... and <phase>-t1,... (unique plan-wide); depends_on may
+reference the same or an earlier phase (never a later one); no cycles; each
+"runner" picks a CLI + model ONLY from the ALLOWED (agent:model)
 pairs (split "agent:model" into {"agent": ..., "model": ...}; default to the
 given role defaults). Keep the author's ordering.
 """
+
+
+def render_prompt(template: str, *, project_context: str = "") -> str:
+    """Interpolate prompt template variables.
+
+    Currently supports ``{project_context}`` — inserted as a clearly labelled
+    block when non-empty, omitted entirely when empty.
+    """
+    ctx_block = ""
+    if project_context:
+        ctx_block = (
+            "\n\nPROJECT CONTEXT (provided by the user — use this to inform your work):\n"
+            + project_context.strip()
+            + "\n"
+        )
+    return template.replace("{project_context}", ctx_block)
+

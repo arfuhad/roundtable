@@ -4,7 +4,7 @@ A small, from-scratch **multi-LLM planning and orchestration harness** that driv
 **other LLMs through their terminal CLIs** (Claude Code, Codex, Gemini CLI, aider,
 `llm`, Ollama, …).
 
-One LLM plans the work and breaks it into **phases → tasks → subtasks**. You
+One LLM plans the work and breaks it into **phases → tasks**. You
 approve the plan. Then a **Main Orchestrator** drives execution: for each phase it
 runs a fresh **Phase Orchestrator** that defines and dispatches **Task Agents**,
 collects their work, summarizes the phase, and hands the summary back to Main —
@@ -154,6 +154,9 @@ agents:
 - `command` is an **argv list** (no shell, so no injection). Tokens may contain
   `{prompt}`, `{system}` and `{model}`. If `{system}` is absent, the system text
   is prepended to the prompt. With `stdin: true`, the prompt is piped on stdin.
+- `pty: true` allocates a real pseudo-terminal for the subprocess — use this when
+  a CLI detects whether it's connected to a TTY and refuses to run (or switches to
+  a degraded mode) without one.
 - The flags above are illustrative — check each tool's own docs for the exact
   model-selection and non-interactive flags.
 - A role value also accepts the shorthand string `agent:model` (e.g.
@@ -166,6 +169,10 @@ agents:
   ```json
   "runner": { "agent": "opencode", "model": "mimo-v2.5-pro" }
   ```
+
+Set the top-level `project_context` key (free text) to inject stack, conventions,
+and working-directory notes into every task/phase prompt. Pass `-v`/`--verbose` to
+any command for debug logging.
 
 ### Seeing what you can assign
 
@@ -217,6 +224,32 @@ agents:
 
 (Check each tool's own docs for the exact non-interactive / auto-edit flags.)
 
+### Per-task controls in plan.json
+
+Two optional fields can be added to any task object in `plan.json` before running
+`harness approve`:
+
+```json
+{
+  "id": "p1-t2",
+  "title": "Deploy to staging",
+  "runner": { "agent": "claude", "model": "opus-4.8" },
+  "validate_command": ["pytest", "tests/smoke/", "-q"],
+  "requires_approval": true
+}
+```
+
+- **`validate_command`** — an argv list that runs in the project root after the task
+  agent finishes. A non-zero exit marks the task as failed (feeding into the retry
+  loop and re-planning); exit 0 means success.
+- **`requires_approval`** — when `true`, the run pauses before executing this task
+  and waits for a human to type:
+  ```bash
+  harness resume --task p1-t2
+  ```
+  The engine prints the exact command. Other concurrent tasks in the same wave are
+  unaffected (the semaphore slot is not held while waiting).
+
 ## Other backends
 
 ```yaml
@@ -229,6 +262,25 @@ litellm model string (`openai/gpt-4o`, `anthropic/claude-3-5-sonnet-latest`,
 `ollama/llama3`, …) and `agent` is ignored — e.g. `main: { model: openai/gpt-4o }`
 (a bare string `openai/gpt-4o` works too). `litellm` requires the extra:
 `pip install 'llm-harness[litellm]'`.
+
+## Driving it from an MCP client
+
+Expose the whole workflow to an MCP client (Claude Code, Claude Desktop) so an
+agent can plan and run the harness as tool calls:
+
+```bash
+harness mcp        # stdio MCP server  (needs the extra: pip install 'llm-harness[mcp]')
+```
+
+Tools: `harness_init`, `harness_map`, `harness_plan`, `harness_approve`,
+`harness_run` (non-blocking; guarded against duplicate launches via a `run.pid`),
+`harness_stop`, `harness_status`, and `harness_usage` (token/cost tally); plus
+read-only `harness://plan`, `harness://state`, and `harness://logs` resources.
+Register it in Claude Code's `.claude/settings.json`:
+
+```json
+{ "mcpServers": { "harness": { "command": "harness-mcp" } } }
+```
 
 ## Project layout produced by a run
 
@@ -261,28 +313,41 @@ you point at them.
   Agents are created per phase and dropped afterward; the Main Orchestrator only
   ever receives the phase *summary*, never task transcripts — so its context stays
   small across long runs. Enforced by the engine, covered by tests.
-- **Dependency-aware execution.** Intra-phase `depends_on` forms a DAG; tasks run
-  in dependency-ordered concurrent waves (`max_concurrency`); dependents receive
-  upstream results as context. Cycles/unknown deps rejected at plan time.
+- **Dependency-aware execution.** `depends_on` forms a DAG; tasks run in
+  dependency-ordered concurrent waves (`max_concurrency`) and dependents receive
+  upstream results as context. A dep may reference a task in the **same phase or
+  any earlier phase**; forward references, cycles, and unknown/duplicate ids are
+  rejected at plan time. (Phases still run in order — cross-phase deps flow
+  *results*, not cross-phase parallelism.)
+- **Failure isolation.** A task that exhausts its retries — or fails its
+  `validate_command` — is marked `failed`; every dependent (same or a later phase)
+  is `skipped`; its phase and the overall run end `failed`, and no `FINAL.md` is
+  written. Provider exit codes are the failure signal, not output heuristics.
 - **Resumable.** Completed phases/tasks are skipped and their on-disk results
-  reused as dependency context.
+  reused as dependency context; re-running retries failed/skipped work.
+- **Dynamic re-planning.** After each dependency wave, if any task failed and
+  tasks remain in the phase, the Phase Orchestrator is asked to adapt the
+  remaining tasks' descriptions before they run — without touching the overall
+  plan structure.
 
 ## Architecture (modules)
 
 | module | responsibility |
 |---|---|
-| `harness/models.py`  | `AgentRef` + `Plan/Phase/Task/Subtask` models + graph validation |
-| `harness/config.py`  | `harness.config.yaml`: provider, role `{agent, model}` runners, `agents` map |
+| `harness/models.py`  | `AgentRef` + `Plan/Phase/Task` models + graph validation (intra- & cross-phase deps) |
+| `harness/errors.py`  | `HarnessError` (user-facing) + `TaskFailed` (per-task failure signal) |
+| `harness/config.py`  | `harness.config.yaml`: provider, role `{agent, model}` runners, `agents` map, `project_context` |
 | `harness/store.py`   | `.harness/` layout, manifest IO, structured event log, all writers |
-| `harness/llm.py`     | `LLMProvider` protocol; `CLIProvider` / `LiteLLMProvider` / `ScriptedProvider`; JSON extraction |
+| `harness/llm.py`     | `LLMProvider` protocol; `CLIProvider` / `LiteLLMProvider` / `ScriptedProvider`; JSON extraction; `RunStats` |
 | `harness/discovery.py` | detect installed CLIs + list their models (`init` / `agents`) |
 | `harness/insights.py`  | `build_state` analytics over `plan.json` + events; terminal rendering |
 | `harness/dashboard.py` | zero-dep web dashboard (stdlib `http.server` + `/api/state`) |
 | `harness/scan.py`    | stdlib codebase digest (pruned tree + key files) for `map` |
 | `harness/prompts.py` | per-role system prompts |
 | `harness/agents.py`  | `Planner`, `Analyst`, `MainOrchestrator`, `PhaseOrchestrator`, `TaskAgent` |
-| `harness/engine.py`  | dependency scheduler + run loop + context-clean boundary |
-| `harness/cli.py`     | `init` / `agents` / `map` / `plan` / `approve` / `run` / `status` / `dashboard` / `watch` |
+| `harness/engine.py`  | dependency scheduler + run loop + context-clean boundary + failure/HITL handling |
+| `harness/cli.py`     | `init` / `agents` / `map` / `plan` / `approve` / `run` / `resume` / `status` / `dashboard` / `watch` / `mcp` |
+| `harness/mcp.py`     | MCP server (`harness mcp` / `harness-mcp`) exposing the workflow as tools + resources |
 
 ## Tests
 
@@ -291,11 +356,13 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-Covers model validation, the `.harness/` store, JSON extraction, the **CLIProvider
-against real subprocesses** (`printf`/`cat`/`pwd`, cwd, missing-command and
-nonzero-exit handling), existing-plan ingestion + non-pollution layout, and a full
-offline engine run asserting the orchestration contract — dependency flow, wave
-ordering, cross-phase isolation, the context-clean invariant, the approval gate,
-and resumability.
+Covers model validation (incl. cross-phase deps, forward-ref/duplicate-id
+rejection), the `.harness/` store, JSON extraction (objects, arrays, double-fenced
+blocks), the **CLIProvider against real subprocesses** (streaming output, cwd,
+missing-command and nonzero-exit handling), existing-plan ingestion + non-pollution
+layout, and full offline engine runs asserting the orchestration contract —
+dependency flow, wave ordering, cross-phase result flow, the context-clean
+invariant, the approval gate (HITL `waiting` → `resume`), failure propagation
+(failed task → skipped dependents → failed run), and resumability.
 
 [litellm]: https://github.com/BerriAI/litellm

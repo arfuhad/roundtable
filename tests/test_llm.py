@@ -12,9 +12,46 @@ def test_extract_json_raw_fenced_and_prose():
     assert extract_json('note: {"k": "a}b{c"}') == {"k": "a}b{c"}
 
 
+def test_extract_json_arrays_and_double_fence():
+    # top-level array, raw and prose-wrapped
+    assert extract_json("[1, 2, 3]") == [1, 2, 3]
+    assert extract_json('prefix [{"a": 1}] suffix') == [{"a": 1}]
+    # object that appears before an array in prose -> object wins
+    assert extract_json('see {"a": 1} and [9]') == {"a": 1}
+    # double-fenced code block
+    assert extract_json('```\n```json\n{"a": 9}\n```\n```') == {"a": 9}
+
+
 def test_extract_json_failure():
     with pytest.raises(ValueError):
         extract_json("no json here at all")
+
+
+async def test_cli_provider_streams_output(tmp_path):
+    from harness.config import AgentSpec
+    from harness.llm import CLIProvider
+
+    spec = AgentSpec(command=["sh", "-c", "printf 'alpha\\nbeta\\ngamma\\n'"])
+    provider = CLIProvider({"echo": spec}, cwd=tmp_path)
+    chunks: list[str] = []
+
+    out = await provider.complete(
+        model="echo", system="s", user="u", role="task_exec", on_output=chunks.append
+    )
+
+    assert "alpha" in out and "gamma" in out          # full output still returned
+    assert "beta" in "".join(chunks)                  # and it was streamed via on_output
+    assert provider.stats.calls == 1                  # usage stats tracked (Task 3.1)
+
+
+async def test_cli_provider_nonzero_exit_raises(tmp_path):
+    from harness.config import AgentSpec
+    from harness.llm import CLIProvider
+
+    spec = AgentSpec(command=["sh", "-c", "echo boom >&2; exit 2"])
+    provider = CLIProvider({"bad": spec}, cwd=tmp_path, max_retries=0)
+    with pytest.raises(RuntimeError, match="exited 2"):
+        await provider.complete(model="bad", system="s", user="u", role="task_exec")
 
 
 async def test_scripted_planner_produces_valid_plan():

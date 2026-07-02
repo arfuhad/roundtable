@@ -1,6 +1,6 @@
 """llm-harness: a multi-LLM planning and orchestration harness.
 
-Flow: Planner LLM -> approved Plan (phases -> tasks -> subtasks) -> Main
+Flow: Planner LLM -> approved Plan (phases -> tasks) -> Main
 Orchestrator drives phases; each Phase Orchestrator (fresh context) dispatches
 Task Agents, summarizes, and reports to Main, which maintains the docs.
 
