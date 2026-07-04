@@ -1,5 +1,7 @@
 """CLI integration: drive the real entrypoint end-to-end on the scripted backend."""
 
+import json
+
 from harness.cli import main
 from harness.config import write_default_config
 from harness.models import Status
@@ -55,3 +57,36 @@ def test_cli_full_lifecycle(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Build a CLI todo app" in out
     assert "dashboard: http://127.0.0.1:" in out
+
+
+def test_status_json(tmp_path, capsys):
+    root = tmp_path / "proj"
+    proj = str(root)
+
+    assert main(["init", proj, "--no-models"]) == 0
+    _use_scripted(root)
+
+    assert main(["plan", "--goal", "Build a CLI todo app", "--project", proj]) == 0
+    assert main(["approve", "--project", proj]) == 0
+    assert main(["run", "--project", proj]) == 0
+    capsys.readouterr()  # drain prior output
+
+    assert main(["status", "--project", proj, "--json"]) == 0
+
+    out = capsys.readouterr().out
+    state = json.loads(out)
+
+    assert isinstance(state, dict)
+    assert state["exists"] is True
+    assert state["goal"] == "Build a CLI todo app"
+    assert state["approved"] is True
+    assert state["status"] == "done"
+    assert "totals" in state
+    assert "phases" in state
+    assert "by_agent" in state
+    assert "timings" in state
+    assert "events" in state
+    assert "generated_at" in state
+
+    assert state["totals"]["phases"] > 0
+    assert state["totals"]["done"] == state["totals"]["tasks"]

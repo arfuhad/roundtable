@@ -364,6 +364,13 @@ async def _run_with_progress(engine: Engine, store: Store, args: argparse.Namesp
 def cmd_status(args: argparse.Namespace) -> int:
     root = Path(args.project).resolve()
     store = Store(root)
+
+    if args.json:
+        import json as _json
+        state = build_state(store)
+        print(_json.dumps(state, indent=2))
+        return 0
+
     plan = store.load_plan()
     mark = {
         Status.done: "[x]", Status.in_progress: "[~]", Status.pending: "[ ]",
@@ -523,6 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("status", help="show phase/task progress")
     sp.add_argument("--project", default=".")
+    sp.add_argument("--json", action="store_true", help="output status as JSON")
     sp.set_defaults(func=cmd_status)
 
     sp = sub.add_parser("dashboard", help="serve a live web dashboard of the run")
