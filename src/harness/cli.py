@@ -26,11 +26,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as _dt
+import os
 import sys
 import threading
 import time
 from pathlib import Path
 
+from . import runctl
 from .agents import Analyst, Planner
 from .config import Config, load_config, write_default_config
 from .dashboard import make_server
@@ -266,6 +268,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     config = load_config(root)
     store = Store(root)
 
+    existing = runctl.current_run_pid(store)
+    if existing is not None:
+        print(
+            f"error: a run is already in progress (pid={existing}); "
+            "wait for it or cancel it with `harness stop`",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.approve:
         # Best-effort auto-approve; a missing/invalid plan is surfaced by the engine.
         try:
@@ -279,7 +290,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     provider = build_provider(config, root)
     engine = Engine(store, config, provider)
-    return asyncio.run(_run_with_progress(engine, store, args))
+    store.write_run_pid(os.getpid())  # this process IS the run; guards double-launch
+    try:
+        return asyncio.run(_run_with_progress(engine, store, args))
+    except KeyboardInterrupt:
+        print("\ninterrupted — re-run `harness run` to resume", file=sys.stderr)
+        return 130
+    finally:
+        store.clear_run_pid()
 
 
 async def _run_with_progress(engine: Engine, store: Store, args: argparse.Namespace) -> int:
@@ -318,14 +336,16 @@ async def _run_with_progress(engine: Engine, store: Store, args: argparse.Namesp
                 sys.stdout.flush()
                 await asyncio.sleep(max(0.1, args.interval))
         plan = await task  # awaits completion; re-raises any engine error
-    except KeyboardInterrupt:
+    except asyncio.CancelledError:
+        # Ctrl-C: asyncio.run cancels this coroutine (KeyboardInterrupt itself
+        # surfaces in cmd_run, not here). Forward the cancellation to the engine
+        # so it can mark the manifest resumable before we go.
         task.cancel()
         try:
             await task
         except BaseException:
             pass
-        print("\ninterrupted — re-run `harness run` to resume", file=sys.stderr)
-        return 130
+        raise
     finally:
         if httpd:
             httpd.shutdown()
@@ -362,8 +382,6 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
     store = Store(Path(args.project).resolve())
-    if not store.has_plan():
-        raise HarnessError("no plan to show; run `harness plan` first")
     httpd, url = make_server(store, host=args.host, port=args.port)
     print(f"dashboard live at {url}  (Ctrl-C to stop)")
     print("watching .harness/ — run `harness run` in another terminal to see it update")
@@ -380,28 +398,38 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_resume(args: argparse.Namespace) -> int:
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Dashboard + REST control API with a machine-readable first line.
+
+    The desktop app spawns `harness serve --project X --port 0` and parses the
+    first stdout line (JSON) for the URL; humans get a friendly line after it.
+    """
     import json as _json
-    root = Path(args.project).resolve()
-    store = Store(root)
-    checkpoint = store.hitl_path(args.task)
-    if not checkpoint.exists():
-        raise HarnessError(
-            f"no pending approval checkpoint for task {args.task!r}; "
-            f"is the run paused and waiting at that task?"
-        )
+    store = Store(Path(args.project).resolve())
+    httpd, url = make_server(store, host=args.host, port=args.port)
+    print(_json.dumps({"event": "serving", "url": url, "project": str(store.root)}), flush=True)
+    print(f"harness API + dashboard live at {url}  (Ctrl-C to stop)", flush=True)
     try:
-        data = _json.loads(checkpoint.read_text())
-    except (ValueError, OSError) as e:
-        raise HarnessError(f"could not read checkpoint for task {args.task!r}: {e}") from e
-    if data.get("status") != "waiting":
-        raise HarnessError(
-            f"task {args.task!r} checkpoint has status {data.get('status')!r}, expected 'waiting'"
-        )
-    data["status"] = "approved"
-    checkpoint.write_text(_json.dumps(data))
-    print(f"task {args.task!r} approved — run will continue")
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
     return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    store = Store(Path(args.project).resolve())
+    print(runctl.approve_hitl(store, args.task))
+    return 0
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    store = Store(Path(args.project).resolve())
+    stopped, msg = runctl.stop_run(store)
+    print(msg)
+    return 0 if stopped else 1
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
@@ -504,6 +532,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--open", action="store_true", help="open the dashboard in a browser")
     sp.set_defaults(func=cmd_dashboard)
 
+    sp = sub.add_parser(
+        "serve",
+        help="serve the dashboard + REST control API (machine-readable URL on stdout)",
+    )
+    sp.add_argument("--project", default=".")
+    sp.add_argument("--host", default="127.0.0.1", help="bind address")
+    sp.add_argument("--port", type=int, default=0, help="port (0 = pick a free port)")
+    sp.set_defaults(func=cmd_serve)
+
     sp = sub.add_parser("watch", help="live terminal dashboard of the run")
     sp.add_argument("--project", default=".")
     sp.add_argument("--interval", type=float, default=1.0, help="refresh seconds (default 1)")
@@ -517,6 +554,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--task", required=True, help="task ID to approve (e.g. p1-t2)")
     sp.add_argument("--project", default=".")
     sp.set_defaults(func=cmd_resume)
+
+    sp = sub.add_parser("stop", help="stop the in-progress run (SIGTERM via run.pid)")
+    sp.add_argument("--project", default=".")
+    sp.set_defaults(func=cmd_stop)
 
     sp = sub.add_parser("mcp", help="start the harness MCP server over stdio (requires mcp extra)")
     sp.set_defaults(func=cmd_mcp)
@@ -536,6 +577,9 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

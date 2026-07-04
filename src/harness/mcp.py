@@ -145,44 +145,15 @@ def _build_server() -> Any:
             approve: If True, auto-approve the plan before running (combines
                      harness_approve + harness_run in one call).
         """
-        import os
+        from . import runctl
         from .store import Store
 
         store = Store(Path(project).resolve())
-
-        # Guard against duplicate launches.
-        existing_pid = store.read_run_pid()
-        if existing_pid is not None:
-            try:
-                os.kill(existing_pid, 0)  # check if process is alive
-                return (
-                    f"error: run already in progress (pid={existing_pid}). "
-                    "Call harness_status to monitor, or harness_stop to cancel."
-                )
-            except ProcessLookupError:
-                # Stale pid file from a crashed process — clean it up.
-                store.clear_run_pid()
-            except PermissionError:
-                # Process exists but we can't signal it — treat as alive.
-                return (
-                    f"error: run already in progress (pid={existing_pid}). "
-                    "Call harness_status to monitor, or harness_stop to cancel."
-                )
-
-        cmd = ["harness", "run", "--project", project, "--no-watch", "--no-dashboard"]
-        if approve:
-            cmd.append("--approve")
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,  # detach so the run outlives this MCP server
-        )
-
-        store.write_run_pid(proc.pid)
-
+        pid, msg = runctl.start_run(store, approve=approve)
+        if pid is None:
+            return f"error: {msg}. Call harness_status to monitor, or harness_stop to cancel."
         return (
-            f"Run started (pid={proc.pid}). "
+            f"Run started (pid={pid}). "
             "Agents are now executing tasks in the background. "
             "Call harness_status() to monitor progress."
         )
@@ -197,30 +168,12 @@ def _build_server() -> Any:
         Args:
             project: Harness project root (default: '.').
         """
-        import os
-        import signal
+        from . import runctl
         from .store import Store
 
         store = Store(Path(project).resolve())
-        pid = store.read_run_pid()
-        if pid is None:
-            return "no run.pid found — no run appears to be in progress."
-
-        try:
-            os.kill(pid, 0)  # check alive
-        except ProcessLookupError:
-            store.clear_run_pid()
-            return f"process {pid} is not running (stale pid file cleaned up)."
-        except PermissionError:
-            return f"error: cannot signal process {pid} (permission denied)."
-
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError as e:
-            return f"error: could not stop process {pid}: {e}"
-
-        store.clear_run_pid()
-        return f"sent SIGTERM to process {pid}. The run should stop shortly."
+        _, msg = runctl.stop_run(store)
+        return msg
 
     @mcp.tool()
     def harness_status(project: str = ".") -> str:
