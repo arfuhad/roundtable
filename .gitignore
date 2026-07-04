@@ -17,3 +17,11 @@ venv/
 
 # Env / secrets
 .env
+
+# Harness run artifacts (per-project, not source)
+.harness/
+
+# Desktop app
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
