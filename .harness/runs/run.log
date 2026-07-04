@@ -1,2 +1,0 @@
-{"ts": "2026-06-30T18:33:20+00:00", "type": "map_started", "msg": "mapping /Users/arfuhad/Development/personal/harness", "target": "/Users/arfuhad/Development/personal/harness", "digest_bytes": 17956}
-{"ts": "2026-06-30T18:35:18+00:00", "type": "map_done", "msg": "map complete", "docs": ["ARCHITECTURE.md", "PRD.md"]}
