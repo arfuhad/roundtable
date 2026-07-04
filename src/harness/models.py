@@ -102,6 +102,7 @@ class Phase(BaseModel):
     tasks: list[Task] = Field(default_factory=list)
     status: Status = Status.pending
     summary_path: str | None = None
+    validate_command: list[str] | None = None  # runs after all tasks succeed; non-zero exit fails the phase
 
     @model_validator(mode="after")
     def _default_slug(self) -> Phase:

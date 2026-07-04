@@ -69,6 +69,7 @@ class Defaults(BaseModel):
     max_retries: int = Field(default=1, ge=0)
     timeout: int = Field(default=900, ge=1)  # per agent call, seconds
     hitl_timeout: int = Field(default=0, ge=0)  # seconds to wait for HITL approval; 0 = infinite
+    validate_timeout: int = Field(default=120, ge=1)  # seconds per task/phase validate_command
 
 
 # No-config fallback agents. Kept model-less so the bare-agent role defaults
@@ -145,6 +146,7 @@ defaults:
                        # (keep at 1 when file-editing agents might touch the same files)
   max_retries: 1       # retries on a failing/timed-out agent call
   timeout: 900         # seconds per agent call
+  validate_timeout: 120  # seconds per task/phase validate_command
 """
 
 

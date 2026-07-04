@@ -26,11 +26,42 @@ import logging
 from .agents import MainOrchestrator, PhaseOrchestrator, TaskAgent
 from .config import Config
 from .errors import HarnessError, TaskFailed
-from .llm import LLMProvider
-from .models import Phase, Plan, Status, Task
+from .llm import CLIProvider, LLMProvider
+from .models import AgentRef, Phase, Plan, Status, Task
 from .store import Store
 
 logger = logging.getLogger("harness")
+
+
+def validate_runners(plan: Plan, config: Config) -> None:
+    """Fail fast (before any agent runs) on runners that cannot execute.
+
+    Only meaningful for ``provider: cli``: every runner's agent must name an
+    entry in the config ``agents`` map. A runner with only a ``model`` falls
+    back to the model naming the agent (CLIProvider back-compat).
+    """
+    if config.provider != "cli":
+        return
+    problems: list[str] = []
+
+    def check(label: str, ref: AgentRef) -> None:
+        key = ref.agent or ref.model
+        if not key:
+            problems.append(f"{label} has no runner (agent/model) assigned")
+        elif key not in config.agents:
+            problems.append(f"{label} references agent {key!r} not defined under `agents:`")
+
+    check("main orchestrator", plan.main_runner)
+    for p in plan.phases:
+        check(f"phase {p.id}", p.runner)
+        for t in p.tasks:
+            check(f"task {t.id}", t.runner)
+    if problems:
+        raise HarnessError(
+            "plan cannot run with the current config:\n  - "
+            + "\n  - ".join(problems)
+            + f"\n  available agents: {', '.join(sorted(config.agents)) or '(none)'}"
+        )
 
 
 class Engine:
@@ -45,7 +76,46 @@ class Engine:
         plan = self.store.load_plan()
         if not plan.approved:
             raise HarnessError("plan is not approved; run `harness approve` first")
+        if isinstance(self.provider, CLIProvider):
+            # Agent lookups only happen on the CLI backend; a scripted/litellm
+            # provider ignores the agents map entirely.
+            validate_runners(plan, self.config)
 
+        try:
+            return await self._run(plan)
+        except asyncio.CancelledError:
+            # Ctrl-C / SIGTERM: leave a resumable manifest and a truthful log —
+            # nothing is running anymore, so nothing may stay "in_progress".
+            self._mark_interrupted(plan)
+            raise
+        except Exception as e:
+            # Any engine crash must be visible to pollers (dashboard/app) —
+            # otherwise plan.json says "in_progress" forever.
+            plan.status = Status.failed
+            self.store.save_plan(plan)
+            self.store.record_event("run_error", message=f"run crashed: {e}")
+            raise
+
+    def _mark_interrupted(self, plan: Plan) -> None:
+        changed = False
+        for phase in plan.phases:
+            for task in phase.tasks:
+                if task.status in (Status.in_progress, Status.waiting):
+                    task.status = Status.pending
+                    changed = True
+            if phase.status == Status.in_progress:
+                phase.status = Status.pending
+                changed = True
+        if plan.status == Status.in_progress:
+            plan.status = Status.pending
+            changed = True
+        if changed:
+            self.store.save_plan(plan)
+        self.store.record_event(
+            "run_interrupted", message="run interrupted — re-run `harness run` to resume"
+        )
+
+    async def _run(self, plan: Plan) -> Plan:
         self.store.scaffold_plan_tree(plan)
         plan.status = Status.in_progress
         self.store.save_plan(plan)
@@ -110,6 +180,13 @@ class Engine:
 
         results, failed_ids, skipped_ids = await self._schedule(plan, phase, po)
 
+        # Phase completion gate: even when every task succeeded, an optional
+        # phase-level validate_command must pass for the phase to count as done
+        # (e.g. the phase's test suite). Skipped when tasks already failed.
+        validation_error: str | None = None
+        if not failed_ids and not skipped_ids and phase.validate_command:
+            validation_error = await self._validate_phase(phase)
+
         ordered = [(t, results.get(t.id, "")) for t in phase.tasks]
         summary = await po.summarize(phase, ordered)
         self.store.write_phase_summary(phase, summary)
@@ -122,15 +199,22 @@ class Engine:
         entry = await main.integrate_phase(plan.goal, phase, summary)
         self._append_progress(phase, entry)
 
-        # A phase is done only if every task completed; failed OR skipped tasks
-        # (the latter possibly blocked by a cross-phase failure) mean it did not.
-        if failed_ids or skipped_ids:
+        # A phase is done only if every task completed AND the phase-level
+        # validation (when configured) passed; failed OR skipped tasks (the
+        # latter possibly blocked by a cross-phase failure) mean it did not.
+        if failed_ids or skipped_ids or validation_error is not None:
             phase.status = Status.failed
+            detail = (
+                f"validation failed: {validation_error[:200]}"
+                if validation_error is not None
+                else f"failed={sorted(failed_ids)}, skipped={sorted(skipped_ids)}"
+            )
             self.store.record_event(
                 "phase_failed",
-                message=f"phase {phase.id} failed; failed={sorted(failed_ids)}, skipped={sorted(skipped_ids)}",
+                message=f"phase {phase.id} failed; {detail}",
                 phase_id=phase.id, index=phase.index, title=phase.title,
                 failed=sorted(failed_ids), skipped=sorted(skipped_ids),
+                validation_error=validation_error,
             )
         else:
             phase.status = Status.done
@@ -331,6 +415,7 @@ class Engine:
 
             max_attempts = self.config.defaults.max_retries + 1
             last_error: str = ""
+            result: str | None = None
             for attempt in range(max_attempts):
                 try:
                     result = await agent.execute(
@@ -338,6 +423,16 @@ class Engine:
                         project_context=project_ctx, on_output=_on_output,
                     )
                     break  # success — exit retry loop
+                except HarnessError as e:
+                    # Configuration problems (unknown agent, pty unsupported, …)
+                    # are not transient — fail the task immediately, no retry.
+                    last_error = str(e)
+                    self.store.record_event(
+                        "task_retry",
+                        message=f"task {task.id} failed (not retryable): {last_error[:200]}",
+                        phase_id=phase.id, task_id=task.id, attempt=attempt + 1,
+                    )
+                    break
                 except (RuntimeError, TimeoutError) as e:
                     last_error = str(e)
                     self.store.record_event(
@@ -347,8 +442,8 @@ class Engine:
                     )
                     if attempt < max_attempts - 1:
                         await asyncio.sleep(min(2.0 * (attempt + 1), 8.0))
-            else:
-                # All retries exhausted — mark failed and raise.
+            if result is None:
+                # Retries exhausted (or non-retryable) — mark failed and raise.
                 task.status = Status.failed
                 self.store.write_result(phase, task, f"error: {last_error}")
                 await self._save(plan)
@@ -449,33 +544,69 @@ class Engine:
             "task_approved", message=f"task {task.id} approved", task_id=task.id
         )
 
-    async def _validate_task(self, task: Task, result: str) -> str:
-        """Run task.validate_command; raise TaskFailed on non-zero exit."""
-        assert task.validate_command  # caller guarantees this
+    async def _run_validate_command(self, argv: list[str]) -> str | None:
+        """Run a validate_command in the project root; return failure detail or None."""
+        timeout = self.config.defaults.validate_timeout
         try:
             proc = await asyncio.create_subprocess_exec(
-                *task.validate_command,
+                *argv,
                 cwd=str(self.store.root),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except OSError as e:  # missing/unrunnable binary
+            return f"validate_command could not run: {e}"
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            raise TaskFailed(task.id, "validate_command timed out after 120s")
+            proc.kill()
+            await proc.wait()
+            return f"validate_command timed out after {timeout}s"
         if proc.returncode != 0:
             detail = (
                 err.decode("utf-8", "replace") + out.decode("utf-8", "replace")
             ).strip()[-400:]
+            return f"validate_command exited {proc.returncode}: {detail}"
+        return None
+
+    async def _validate_task(self, task: Task, result: str) -> str:
+        """Run task.validate_command; raise TaskFailed on non-zero exit."""
+        assert task.validate_command  # caller guarantees this
+        error = await self._run_validate_command(task.validate_command)
+        if error is not None:
             self.store.record_event(
                 "task_validation_failed",
-                message=f"task {task.id} validate_command exited {proc.returncode}",
+                message=f"task {task.id} {error[:200]}",
                 task_id=task.id,
             )
-            raise TaskFailed(task.id, f"validate_command exited {proc.returncode}: {detail}")
+            raise TaskFailed(task.id, error)
         self.store.record_event(
             "task_validated", message=f"task {task.id} validate_command passed", task_id=task.id
         )
         return result
+
+    async def _validate_phase(self, phase: Phase) -> str | None:
+        """Run phase.validate_command; return failure detail or None on success.
+
+        This is the completion gate for otherwise-successful phases: every task
+        finished, so a non-zero exit means their combined output does not
+        satisfy the phase (e.g. its test suite still fails).
+        """
+        assert phase.validate_command  # caller guarantees this
+        error = await self._run_validate_command(phase.validate_command)
+        if error is not None:
+            self.store.record_event(
+                "phase_validation_failed",
+                message=f"phase {phase.id} {error[:200]}",
+                phase_id=phase.id,
+            )
+            return error
+        self.store.record_event(
+            "phase_validated",
+            message=f"phase {phase.id} validate_command passed",
+            phase_id=phase.id,
+        )
+        return None
 
     def _append_progress(self, phase: Phase, entry: str) -> None:
         prior = self.store.read_doc("PROGRESS.md") or "# Progress\n\n"
@@ -485,7 +616,10 @@ class Engine:
 
 def _phase_md(phase: Phase) -> str:
     lines = [f"# Phase {phase.index}: {phase.title}", "", phase.objective, "",
-             f"- Orchestrator: `{phase.runner}`", "", "## Tasks", ""]
+             f"- Orchestrator: `{phase.runner}`"]
+    if phase.validate_command:
+        lines.append(f"- Validation: `{' '.join(phase.validate_command)}`")
+    lines += ["", "## Tasks", ""]
     for i, t in enumerate(phase.tasks, start=1):
         dep = f" (depends on {', '.join(t.depends_on)})" if t.depends_on else ""
         lines.append(f"{i}. **{t.title}** `[{t.id}]` — `{t.runner}`{dep}")
