@@ -44,6 +44,23 @@ async def test_cli_provider_streams_output(tmp_path):
     assert provider.stats.calls == 1                  # usage stats tracked (Task 3.1)
 
 
+async def test_cli_provider_estimates_tokens(tmp_path):
+    from harness.config import AgentSpec
+    from harness.llm import CLIProvider, estimate_tokens
+
+    spec = AgentSpec(command=["sh", "-c", "printf 'some response text here'"])
+    provider = CLIProvider({"echo": spec}, cwd=tmp_path)
+
+    system, user = "system prompt " * 4, "user prompt " * 8
+    out = await provider.complete(model="echo", system=system, user=user, role="task_exec")
+
+    snap = provider.stats.snapshot()
+    assert snap["estimated"] is True                  # CLI has no usage metadata -> estimated
+    assert snap["prompt_tokens"] == estimate_tokens(system) + estimate_tokens(user)
+    assert snap["completion_tokens"] == estimate_tokens(out)
+    assert snap["total_tokens"] == snap["prompt_tokens"] + snap["completion_tokens"] > 0
+
+
 async def test_cli_provider_nonzero_exit_raises(tmp_path):
     from harness.config import AgentSpec
     from harness.llm import CLIProvider

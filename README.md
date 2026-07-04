@@ -148,6 +148,10 @@ harness serve --project . --port 0
 State-changing requests from browsers are limited to localhost/Tauri origins;
 non-browser clients (e.g. curl) are unaffected.
 
+With `provider: cli` a CLI returns only stdout, so token counts are **estimated**
+from text length (~4 chars/token) and flagged with `"estimated": true` in the
+usage snapshot; `provider: litellm` reports exact counts from the API.
+
 ## How "terminal access to other LLMs" works
 
 With `provider: cli`, each role is a **`{agent, model}` pair**: `agent` names an

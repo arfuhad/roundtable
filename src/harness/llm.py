@@ -51,12 +51,18 @@ class LLMProvider(Protocol):
 
 @dataclass
 class RunStats:
-    """Accumulated usage statistics for a provider across an entire run."""
+    """Accumulated usage statistics for a provider across an entire run.
+
+    ``estimated`` is True when the token counts are approximations rather than
+    exact figures reported by the provider — the case for the CLI backend,
+    which only sees stdout and has no usage metadata to read.
+    """
     calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
     total_duration_s: float = 0.0
+    estimated: bool = False
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -65,7 +71,20 @@ class RunStats:
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
             "total_duration_s": round(self.total_duration_s, 2),
+            "estimated": self.estimated,
         }
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token count (~4 chars/token) for providers that report no usage.
+
+    Used by the CLI backend so a run surfaces an approximate token tally
+    instead of zeros. Flagged via ``RunStats.estimated`` so callers can label
+    it as an estimate rather than an exact count.
+    """
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
 
 
 # --------------------------------------------------------------------------- #
@@ -321,6 +340,14 @@ class CLIProvider:
         )
         self.stats.calls += 1
         self.stats.total_duration_s += time.monotonic() - t0
+        # A CLI returns only stdout — no usage metadata — so approximate tokens
+        # from text length and mark the run's stats as estimated.
+        prompt_est = estimate_tokens(system) + estimate_tokens(user)
+        completion_est = estimate_tokens(result)
+        self.stats.prompt_tokens += prompt_est
+        self.stats.completion_tokens += completion_est
+        self.stats.total_tokens += prompt_est + completion_est
+        self.stats.estimated = True
         return result
 
     async def _run(
