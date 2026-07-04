@@ -110,14 +110,43 @@ machine), both zero-dependency (stdlib only):
 harness dashboard            # web UI at http://127.0.0.1:8787 (--open to launch a browser)
 harness dashboard --host 0.0.0.0 --port 9000   # expose on your LAN
 harness watch                # live dashboard right in the terminal
+harness stop                 # SIGTERM the in-progress run (via .harness/runs/run.pid)
 ```
 
 These show overall
 progress, **what each agent is doing right now** (task, `agent:model`, elapsed),
 per-phase/task status, per-agent task counts + time, task durations (avg /
-slowest), and a rolling event timeline. The web dashboard polls `GET /api/state`
-(plain JSON) ~1s — point your own tooling at it too. No build step, no JS
-framework, no API keys.
+slowest), and a rolling event timeline. The web dashboard is also **interactive**:
+approve the plan, start/stop a run, and approve waiting HITL tasks right from the
+page. No build step, no JS framework, no API keys.
+
+## REST control API (`harness serve`)
+
+The dashboard server doubles as a local JSON control API. `harness serve` starts
+it headlessly and prints a
+machine-readable JSON line first (`{"event": "serving", "url": ...}`) so tools
+can parse the picked port (`--port 0` = a free one):
+
+```bash
+harness serve --project . --port 0
+```
+
+| endpoint | what it does |
+|---|---|
+| `GET /api/state` | live run state snapshot (same data as `watch`) |
+| `GET /api/project` | project root, plan/config presence, run pid, waiting tasks |
+| `GET /api/plan` · `PUT /api/plan` | read / save the plan (validated; editing resets approval) |
+| `POST /api/plan/generate` · `GET` | spawn a detached `harness plan` (goal/prd/plan_file) · poll it |
+| `POST /api/approve` | validate runners against the config, then approve |
+| `POST /api/run` · `POST /api/stop` | spawn a detached run (guarded by `run.pid`) · SIGTERM it |
+| `POST /api/resume` | approve a waiting HITL task `{"task": "p1-t2"}` |
+| `POST /api/init` | scaffold `.harness/` + default config |
+| `GET /api/config` · `PUT /api/config` | read / save `harness.config.yaml` (schema-validated) |
+| `GET /api/agents` | probe installed CLIs + their models (`?timeout=s`) |
+| `GET /api/usage` | provider usage snapshots (calls, tokens, duration) |
+
+State-changing requests from browsers are limited to localhost/Tauri origins;
+non-browser clients (e.g. curl) are unaffected.
 
 ## How "terminal access to other LLMs" works
 
@@ -224,7 +253,7 @@ agents:
 
 (Check each tool's own docs for the exact non-interactive / auto-edit flags.)
 
-### Per-task controls in plan.json
+### Per-task and per-phase controls in plan.json
 
 Two optional fields can be added to any task object in `plan.json` before running
 `harness approve`:
@@ -249,6 +278,13 @@ Two optional fields can be added to any task object in `plan.json` before runnin
   ```
   The engine prints the exact command. Other concurrent tasks in the same wave are
   unaffected (the semaphore slot is not held while waiting).
+
+A **phase object** accepts `validate_command` too — the phase **completion
+gate**. It runs in the project root after *all* of the phase's tasks succeed
+(e.g. the phase's test suite); a non-zero exit marks the phase `failed` even
+though its tasks are `done`. On re-run the completed tasks are reused and only
+the gate re-runs, so fixing the project and re-running heals the phase.
+Validation commands time out after `defaults.validate_timeout` (120s default).
 
 ## Other backends
 
@@ -322,7 +358,9 @@ you point at them.
 - **Failure isolation.** A task that exhausts its retries — or fails its
   `validate_command` — is marked `failed`; every dependent (same or a later phase)
   is `skipped`; its phase and the overall run end `failed`, and no `FINAL.md` is
-  written. Provider exit codes are the failure signal, not output heuristics.
+  written. A phase whose own `validate_command` fails is marked `failed` even when
+  all its tasks completed. Provider exit codes are the failure signal, not output
+  heuristics.
 - **Resumable.** Completed phases/tasks are skipped and their on-disk results
   reused as dependency context; re-running retries failed/skipped work.
 - **Dynamic re-planning.** After each dependency wave, if any task failed and
@@ -341,12 +379,13 @@ you point at them.
 | `harness/llm.py`     | `LLMProvider` protocol; `CLIProvider` / `LiteLLMProvider` / `ScriptedProvider`; JSON extraction; `RunStats` |
 | `harness/discovery.py` | detect installed CLIs + list their models (`init` / `agents`) |
 | `harness/insights.py`  | `build_state` analytics over `plan.json` + events; terminal rendering |
-| `harness/dashboard.py` | zero-dep web dashboard (stdlib `http.server` + `/api/state`) |
+| `harness/dashboard.py` | zero-dep web dashboard + REST control API (stdlib `http.server`) |
+| `harness/runctl.py`   | `run.pid` protocol: detached run/plan launches, stop, HITL approve |
 | `harness/scan.py`    | stdlib codebase digest (pruned tree + key files) for `map` |
 | `harness/prompts.py` | per-role system prompts |
 | `harness/agents.py`  | `Planner`, `Analyst`, `MainOrchestrator`, `PhaseOrchestrator`, `TaskAgent` |
 | `harness/engine.py`  | dependency scheduler + run loop + context-clean boundary + failure/HITL handling |
-| `harness/cli.py`     | `init` / `agents` / `map` / `plan` / `approve` / `run` / `resume` / `status` / `dashboard` / `watch` / `mcp` |
+| `harness/cli.py`     | `init` / `agents` / `map` / `plan` / `approve` / `run` / `resume` / `stop` / `status` / `dashboard` / `serve` / `watch` / `mcp` |
 | `harness/mcp.py`     | MCP server (`harness mcp` / `harness-mcp`) exposing the workflow as tools + resources |
 
 ## Tests
@@ -363,6 +402,7 @@ missing-command and nonzero-exit handling), existing-plan ingestion + non-pollut
 layout, and full offline engine runs asserting the orchestration contract —
 dependency flow, wave ordering, cross-phase result flow, the context-clean
 invariant, the approval gate (HITL `waiting` → `resume`), failure propagation
-(failed task → skipped dependents → failed run), and resumability.
+(failed task → skipped dependents → failed run), the phase completion gate
+(phase `validate_command` failing/healing across re-runs), and resumability.
 
 [litellm]: https://github.com/BerriAI/litellm
