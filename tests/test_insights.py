@@ -28,6 +28,8 @@ def _seed(tmp_path):
         {"ts": t0, "type": "run_started", "goal": "ship it"},
         {"ts": t0, "type": "task_started", "task_id": "p1-t1", "agent": "opencode", "model": "mimo-v2.5-pro"},
         {"ts": t30, "type": "task_done", "task_id": "p1-t1", "agent": "opencode", "model": "mimo-v2.5-pro"},
+        {"ts": t30, "type": "usage", "calls": 3, "prompt_tokens": 900, "completion_tokens": 300,
+         "total_tokens": 1200, "total_duration_s": 42.0, "estimated": True},
         {"ts": t30, "type": "task_started", "task_id": "p1-t2", "agent": "opencode", "model": "mimo-v2.5-pro"},
     ]
     store.runs_dir.mkdir(parents=True, exist_ok=True)
@@ -70,6 +72,18 @@ def test_render_text_contains_key_facts(tmp_path):
     assert "1/2 tasks" in out and "50%" in out
     assert "Beta" in out                      # the currently-running task
     assert "opencode" in out                  # per-agent line
+
+
+def test_usage_surfaced_and_filtered_from_feed(tmp_path):
+    state = build_state(_seed(tmp_path))
+    u = state["usage"]
+    assert (u["total_tokens"], u["prompt_tokens"], u["completion_tokens"]) == (1200, 900, 300)
+    assert u["calls"] == 3 and u["estimated"] is True
+    # usage events feed the tile, not the raw event stream
+    assert all(e["type"] != "usage" for e in state["events"])
+    # terminal renderer shows the usage line, flagged as an estimate
+    out = render_text(state)
+    assert "usage:" in out and "1,200 tokens" in out and "(est)" in out
 
 
 def test_fmt_dur():

@@ -116,7 +116,8 @@ harness stop                 # SIGTERM the in-progress run (via .harness/runs/ru
 These show overall
 progress, **what each agent is doing right now** (task, `agent:model`, elapsed),
 per-phase/task status, per-agent task counts + time, task durations (avg /
-slowest), and a rolling event timeline. The web dashboard is also **interactive**:
+slowest), live token usage (estimated on the CLI backend), and a rolling event
+timeline. The web dashboard is also **interactive**:
 approve the plan, start/stop a run, and approve waiting HITL tasks right from the
 page. No build step, no JS framework, no API keys.
 

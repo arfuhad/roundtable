@@ -491,7 +491,10 @@ async function tick() {
   $("insights").innerHTML =
     `<div class="chips">${ba || '<span class="idle">no agent activity yet</span>'}</div>`
     + (tm.avg_task_s!=null ? `<div class="meta" style="margin-top:10px">avg task ${dur(tm.avg_task_s)}`
-        + (tm.slowest?` · slowest ${esc(tm.slowest.task_id)} ${dur(tm.slowest.duration_s)}`:"") + `</div>` : "");
+        + (tm.slowest?` · slowest ${esc(tm.slowest.task_id)} ${dur(tm.slowest.duration_s)}`:"") + `</div>` : "")
+    + (st.usage ? `<div class="meta" style="margin-top:10px">usage: <b>${st.usage.total_tokens.toLocaleString()}</b> tokens `
+        + `(${st.usage.prompt_tokens.toLocaleString()} in / ${st.usage.completion_tokens.toLocaleString()} out) · ${st.usage.calls} calls`
+        + (st.usage.estimated ? ` <span class="idle">(est)</span>` : "") + `</div>` : "");
 
   // events
   $("events").innerHTML = st.events.map(e => `<li>

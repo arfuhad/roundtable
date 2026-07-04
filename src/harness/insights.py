@@ -114,6 +114,21 @@ def build_state(store: Store, *, event_limit: int = 40) -> dict[str, Any]:
     for key, agg in by_agent.items():
         agg["total_s"] = round(agg["total_s"], 1)
 
+    # Latest provider usage snapshot (emitted per task + at run end by the engine).
+    usage_evt = next((e for e in reversed(events) if e.get("type") == "usage"), None)
+    usage = None
+    if usage_evt:
+        usage = {
+            "calls": usage_evt.get("calls", 0),
+            "total_tokens": usage_evt.get("total_tokens", 0),
+            "prompt_tokens": usage_evt.get("prompt_tokens", 0),
+            "completion_tokens": usage_evt.get("completion_tokens", 0),
+            "total_duration_s": usage_evt.get("total_duration_s", 0.0),
+            "estimated": usage_evt.get("estimated", False),
+        }
+    # Usage events feed the tile above; keep them out of the raw event stream.
+    feed = [e for e in events if e.get("type") != "usage"]
+
     return {
         "exists": True,
         "goal": plan.goal,
@@ -130,7 +145,8 @@ def build_state(store: Store, *, event_limit: int = 40) -> dict[str, Any]:
             "slowest": ({"task_id": slowest[0], "duration_s": round(slowest[1], 1)}
                         if slowest else None),
         },
-        "events": list(reversed(events[-event_limit:])),
+        "usage": usage,
+        "events": list(reversed(feed[-event_limit:])),
         "generated_at": now.isoformat(timespec="seconds"),
     }
 
@@ -179,5 +195,14 @@ def render_text(state: dict[str, Any], *, width: int = 64) -> str:
         slow = tim["slowest"]
         extra = f" · slowest {slow['task_id']} {fmt_dur(slow['duration_s'])}" if slow else ""
         lines.append(f"avg task {fmt_dur(tim['avg_task_s'])}{extra}")
+
+    u = state.get("usage")
+    if u:
+        note = " (est)" if u.get("estimated") else ""
+        lines.append(
+            f"usage: {u['total_tokens']:,} tokens"
+            f" ({u['prompt_tokens']:,} in / {u['completion_tokens']:,} out)"
+            f" · {u['calls']} calls{note}"
+        )
 
     return "\n".join(lines)

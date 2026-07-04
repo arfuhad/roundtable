@@ -474,6 +474,13 @@ class Engine:
                 phase_id=phase.id, task_id=task.id, title=task.title,
                 agent=task.runner.agent, model=task.runner.model,
             )
+            # Emit a running usage snapshot so the dashboards update cost live,
+            # not just once at the end of the run.
+            if hasattr(self.provider, "stats"):
+                self.store.record_event(
+                    "usage", message="provider usage stats",
+                    **self.provider.stats.snapshot(),
+                )
             return result
 
     # ------------------------------------------------------------------ #
