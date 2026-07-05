@@ -9,12 +9,12 @@ import json
 
 import pytest
 
-from harness.config import Config, Defaults
-from harness.engine import Engine
-from harness.errors import HarnessError
-from harness.llm import ScriptedProvider
-from harness.models import AgentRef, Phase, Plan, Status, Task
-from harness.store import Store
+from roundtable.config import Config, Defaults
+from roundtable.engine import Engine
+from roundtable.errors import RoundtableError
+from roundtable.llm import ScriptedProvider
+from roundtable.models import AgentRef, Phase, Plan, Status, Task
+from roundtable.store import Store
 
 ROLES = {"planner": "m/planner", "main": "m/main", "phase": "m/phase", "task": "m/task"}
 
@@ -56,7 +56,7 @@ def sentinel_responder(role, model, system, user, meta):
 
 
 async def _make_approved_plan(store: Store, provider: ScriptedProvider) -> Plan:
-    from harness.agents import Planner
+    from roundtable.agents import Planner
 
     plan = await Planner(provider, AgentRef(agent=ROLES["planner"])).create_plan(
         "goal", list(ROLES.values()), ROLES
@@ -133,7 +133,7 @@ async def test_run_requires_approval(tmp_path):
     plan.approved = False
     store.save_plan(plan)
     engine = Engine(store, Config(), ScriptedProvider(sentinel_responder))
-    with pytest.raises(HarnessError, match="not approved"):
+    with pytest.raises(RoundtableError, match="not approved"):
         await engine.run()
 
 
@@ -259,9 +259,9 @@ async def test_hitl_approval_sets_waiting_then_resumes(tmp_path):
     # The task is visibly waiting, and the run has not completed.
     assert store.load_plan().phases[0].tasks[0].status == Status.waiting
     assert not run_task.done()
-    assert store.list_waiting_checkpoints()  # surfaced for `harness status`
+    assert store.list_waiting_checkpoints()  # surfaced for `roundtable status`
 
-    # Approve it (as `harness resume` would) and let the run finish.
+    # Approve it (as `roundtable resume` would) and let the run finish.
     data = json.loads(cp.read_text())
     data["status"] = "approved"
     cp.write_text(json.dumps(data))
@@ -275,7 +275,7 @@ async def test_hitl_approval_sets_waiting_then_resumes(tmp_path):
 async def test_replan_ignores_non_dict_model_output(tmp_path):
     # A replanning model that returns a JSON array (not an object) must not crash;
     # replan should degrade to "no changes".
-    from harness.agents import PhaseOrchestrator
+    from roundtable.agents import PhaseOrchestrator
 
     def responder(role, model, system, user, meta):
         if role == "phase_replan":

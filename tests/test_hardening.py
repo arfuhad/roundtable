@@ -8,13 +8,13 @@ import sys
 
 import pytest
 
-from harness import runctl
-from harness.config import Config
-from harness.engine import Engine, validate_runners
-from harness.errors import HarnessError
-from harness.llm import CLIProvider, ScriptedProvider
-from harness.models import Phase, Plan, Status, Task
-from harness.store import Store
+from roundtable import runctl
+from roundtable.config import Config
+from roundtable.engine import Engine, validate_runners
+from roundtable.errors import RoundtableError
+from roundtable.llm import CLIProvider, ScriptedProvider
+from roundtable.models import Phase, Plan, Status, Task
+from roundtable.store import Store
 
 
 def _plan(runner="claude", approved=True):
@@ -33,7 +33,7 @@ def test_validate_runners_rejects_unknown_and_missing():
     config = Config()  # provider cli; agents: claude/codex/gemini
     validate_runners(_plan("claude"), config)  # known agent -> fine
 
-    with pytest.raises(HarnessError) as ei:
+    with pytest.raises(RoundtableError) as ei:
         validate_runners(_plan("m/task"), config)
     msg = str(ei.value)
     assert "m/task" in msg and "available agents" in msg
@@ -41,7 +41,7 @@ def test_validate_runners_rejects_unknown_and_missing():
     plan = _plan("claude")
     plan.phases[0].tasks[0].runner.agent = ""
     plan.phases[0].tasks[0].runner.model = ""
-    with pytest.raises(HarnessError) as ei:
+    with pytest.raises(RoundtableError) as ei:
         validate_runners(plan, config)
     assert "no runner" in str(ei.value)
 
@@ -57,7 +57,7 @@ async def test_engine_validates_before_running_with_cli_provider(tmp_path):
     config = Config()
     provider = CLIProvider(config.agents, cwd=tmp_path)
     engine = Engine(store, config, provider)
-    with pytest.raises(HarnessError, match="nope"):
+    with pytest.raises(RoundtableError, match="nope"):
         await engine.run()
     # nothing started: no events, plan untouched
     assert store.load_plan().status == Status.pending
@@ -113,14 +113,14 @@ async def test_interrupt_resets_in_progress_to_pending(tmp_path):
     assert any(e["type"] == "run_interrupted" for e in store.read_events())
 
 
-async def test_harness_error_in_task_fails_task_without_retry(tmp_path):
+async def test_roundtable_error_in_task_fails_task_without_retry(tmp_path):
     calls = {"n": 0}
 
     class ConfigErrorProvider(ScriptedProvider):
         async def complete(self, **kw):
             if kw.get("role") == "task_exec":
                 calls["n"] += 1
-                raise HarnessError("agent 'x' is not defined")
+                raise RoundtableError("agent 'x' is not defined")
             return await super().complete(**kw)
 
     store = Store(tmp_path)
@@ -231,7 +231,7 @@ def test_start_run_refuses_when_live(tmp_path):
 
 def test_approve_hitl_transitions(tmp_path):
     store = Store(tmp_path)
-    with pytest.raises(HarnessError, match="no pending approval"):
+    with pytest.raises(RoundtableError, match="no pending approval"):
         runctl.approve_hitl(store, "p1-t1")
 
     cp = store.hitl_path("p1-t1")
@@ -241,5 +241,5 @@ def test_approve_hitl_transitions(tmp_path):
     assert "approved" in msg
     assert json.loads(cp.read_text())["status"] == "approved"
 
-    with pytest.raises(HarnessError, match="expected 'waiting'"):
+    with pytest.raises(RoundtableError, match="expected 'waiting'"):
         runctl.approve_hitl(store, "p1-t1")  # already approved

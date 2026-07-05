@@ -48,7 +48,7 @@ class Planner:
     async def structure_plan(
         self, existing: str, allowed_models: list[str], defaults: dict[str, AgentRef]
     ) -> Plan:
-        """Convert an existing free-form plan / PRD into the harness schema."""
+        """Convert an existing free-form plan / PRD into the roundtable schema."""
         user = (
             f"EXISTING PLAN / PRD:\n{existing}\n\n"
             f"ALLOWED (agent:model): {', '.join(allowed_models)}\n"

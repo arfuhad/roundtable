@@ -158,7 +158,7 @@ Output ONLY a single JSON object (no prose, no code fences):
 
 PLAN_IMPORT_SYSTEM = """\
 You are importing an EXISTING plan or requirements/PRD document. Convert it into
-the harness plan JSON WITHOUT inventing or dropping scope: preserve the author's
+the roundtable plan JSON WITHOUT inventing or dropping scope: preserve the author's
 phases, tasks, and steps as faithfully as possible; only structure them and fill
 in ids, dependencies, and model assignments.
 

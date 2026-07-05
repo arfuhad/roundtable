@@ -12,7 +12,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .errors import HarnessError
+from .errors import RoundtableError
 
 
 class Status(str, Enum):
@@ -83,7 +83,7 @@ class Task(BaseModel):
     status: Status = Status.pending
     result_path: str | None = None
     validate_command: list[str] | None = None  # run after execution; non-zero exit = failure
-    requires_approval: bool = False  # pause and wait for `harness resume` before executing
+    requires_approval: bool = False  # pause and wait for `roundtable resume` before executing
 
     @model_validator(mode="after")
     def _default_slug(self) -> Task:
@@ -123,14 +123,14 @@ class Phase(BaseModel):
         ``external_ids`` are task ids defined in *other* phases that this phase's
         tasks may depend on (cross-phase deps). They are treated as already
         satisfied and don't participate in intra-phase ordering. Raises
-        HarnessError on unknown dep ids or intra-phase cycles.
+        RoundtableError on unknown dep ids or intra-phase cycles.
         """
         external_ids = external_ids or set()
         by_id = {t.id: t for t in self.tasks}
         for t in self.tasks:
             for dep in t.depends_on:
                 if dep not in by_id and dep not in external_ids:
-                    raise HarnessError(
+                    raise RoundtableError(
                         f"task {t.id!r} depends on unknown task {dep!r} in phase {self.id!r}"
                     )
         ordered: list[Task] = []
@@ -141,7 +141,7 @@ class Phase(BaseModel):
             if t.id in seen:
                 return
             if t.id in visiting:
-                raise HarnessError(f"dependency cycle detected at task {t.id!r}")
+                raise RoundtableError(f"dependency cycle detected at task {t.id!r}")
             visiting.add(t.id)
             for dep in t.depends_on:
                 if dep in by_id:  # only intra-phase deps affect ordering
@@ -168,7 +168,7 @@ class Plan(BaseModel):
     def _check_unique_ids(self) -> Plan:
         pids = [p.id for p in self.phases]
         if len(pids) != len(set(pids)):
-            raise HarnessError("duplicate phase ids in plan")
+            raise RoundtableError("duplicate phase ids in plan")
         # Task ids are unique across the WHOLE plan — cross-phase deps reference
         # tasks by id, so ids must be globally resolvable. Phase list order is the
         # execution order; a dep may only reference the same or an earlier phase.
@@ -177,7 +177,7 @@ class Plan(BaseModel):
         for i, p in enumerate(self.phases):
             for t in p.tasks:
                 if t.id in all_ids:
-                    raise HarnessError(f"duplicate task id {t.id!r} in plan")
+                    raise RoundtableError(f"duplicate task id {t.id!r} in plan")
                 all_ids.add(t.id)
                 task_phase_pos[t.id] = i
         for i, p in enumerate(self.phases):
@@ -186,9 +186,9 @@ class Plan(BaseModel):
             for t in p.tasks:
                 for dep in t.depends_on:
                     if dep not in all_ids:
-                        raise HarnessError(f"task {t.id!r} depends on unknown task {dep!r}")
+                        raise RoundtableError(f"task {t.id!r} depends on unknown task {dep!r}")
                     if task_phase_pos[dep] > i:
-                        raise HarnessError(
+                        raise RoundtableError(
                             f"task {t.id!r} depends on {dep!r} in a later phase; "
                             "cross-phase dependencies must reference an earlier phase"
                         )

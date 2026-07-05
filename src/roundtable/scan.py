@@ -16,7 +16,7 @@ from pathlib import Path
 
 # Directories we never descend into: VCS, caches, deps, build output, IDE noise.
 IGNORE_DIRS = frozenset({
-    ".git", ".hg", ".svn", ".harness",
+    ".git", ".hg", ".svn", ".roundtable",
     "node_modules", ".venv", "venv", "env", "__pycache__",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".cache",
     "dist", "build", "target", ".next", "out", "coverage", ".nyc_output",

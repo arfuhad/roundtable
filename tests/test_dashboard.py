@@ -4,9 +4,9 @@ import json
 import threading
 import urllib.request
 
-from harness.dashboard import make_server
-from harness.models import Phase, Plan, Task
-from harness.store import Store
+from roundtable.dashboard import make_server
+from roundtable.models import Phase, Plan, Task
+from roundtable.store import Store
 
 
 def _serve(store):
@@ -32,7 +32,7 @@ def test_dashboard_serves_state_and_page(tmp_path):
 
         with urllib.request.urlopen(url + "/", timeout=5) as r:
             body = r.read().decode()
-        assert r.status == 200 and "llm-harness" in body.lower()
+        assert r.status == 200 and "roundtable" in body.lower()
         assert "/api/state" in body  # the page polls the API
     finally:
         httpd.shutdown()

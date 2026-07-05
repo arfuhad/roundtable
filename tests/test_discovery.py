@@ -3,8 +3,8 @@
 Uses POSIX utilities (printf/true) so the probes are deterministic and offline.
 """
 
-from harness.config import AgentSpec
-from harness.discovery import discover
+from roundtable.config import AgentSpec
+from roundtable.discovery import discover
 
 
 def _by_name(statuses):

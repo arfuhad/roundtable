@@ -3,7 +3,7 @@
 Layout::
 
     <root>/
-      harness.config.yaml
+      roundtable.config.yaml
       plan/{BRIEF.md, PLAN.md, plan.json}
       phases/phase-NN-<slug>/
         PHASE.md
@@ -51,15 +51,15 @@ def _utcnow() -> str:
 
 
 class Store:
-    """All disk reads/writes for one harness project.
+    """All disk reads/writes for one roundtable project.
 
     ``root`` is the target project directory (where agents do their work).
-    All harness artifacts live under ``root/workdir`` (default ``.harness``) so
-    they never clutter an existing repo. Only ``harness.config.yaml`` sits at the
+    All roundtable artifacts live under ``root/workdir`` (default ``.roundtable``) so
+    they never clutter an existing repo. Only ``roundtable.config.yaml`` sits at the
     project root.
     """
 
-    def __init__(self, root: Path | str, workdir: str = ".harness"):
+    def __init__(self, root: Path | str, workdir: str = ".roundtable"):
         self.root = Path(root).resolve()
         self.base = self.root / workdir
         self._log_lock = threading.Lock()  # serialize run.log appends across threads
@@ -156,7 +156,7 @@ class Store:
                 self.task_output_dir(phase, task).mkdir(parents=True, exist_ok=True)
 
     def archive_current_run(self) -> Path | None:
-        """Move the current run's artifacts to .harness/archive/<created_at>/.
+        """Move the current run's artifacts to .roundtable/archive/<created_at>/.
 
         Moves plan/, phases/, runs/ entirely and the run-specific docs
         (OVERVIEW.md, PROGRESS.md, FINAL.md).  Project-level docs
@@ -205,7 +205,7 @@ class Store:
     def load_plan(self) -> Plan:
         if not self.manifest_path.exists():
             raise FileNotFoundError(
-                f"no plan manifest at {self.manifest_path}; run `harness plan` first"
+                f"no plan manifest at {self.manifest_path}; run `roundtable plan` first"
             )
         return Plan.model_validate_json(self.manifest_path.read_text())
 

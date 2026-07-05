@@ -1,4 +1,4 @@
-"""Zero-dependency web dashboard + local REST control API for a harness project.
+"""Zero-dependency web dashboard + local REST control API for a roundtable project.
 
 A stdlib ``http.server`` serves one self-contained page (no build step, no JS
 framework) that polls ``/api/state`` ~1s and renders live progress, plus a JSON
@@ -8,14 +8,14 @@ control API used by the page's buttons and by the desktop app:
     GET  /api/project         project root + what exists (plan/config)
     GET  /api/plan            plan.json parsed
     PUT  /api/plan            save an edited plan (validates; resets approval)
-    POST /api/plan/generate   spawn a detached `harness plan` (goal/prd/plan_file)
+    POST /api/plan/generate   spawn a detached `roundtable plan` (goal/prd/plan_file)
     GET  /api/plan/generate   poll a detached plan generation (running/log tail)
     POST /api/approve         validate runners + set approved
-    POST /api/run             spawn a detached `harness run` (guarded by run.pid)
+    POST /api/run             spawn a detached `roundtable run` (guarded by run.pid)
     POST /api/stop            SIGTERM the recorded run pid
     POST /api/resume          approve a waiting HITL task  {"task": "p1-t2"}
-    POST /api/init            scaffold .harness/ + default config
-    GET  /api/config          harness.config.yaml text
+    POST /api/init            scaffold .roundtable/ + default config
+    GET  /api/config          roundtable.config.yaml text
     PUT  /api/config          save config text (validated as YAML + schema)
     GET  /api/agents          probe configured CLIs + their models (?timeout=s)
     GET  /api/usage           provider usage snapshots from the event log
@@ -41,7 +41,7 @@ from . import runctl
 from .config import CONFIG_FILENAME, Config, load_config, write_default_config
 from .discovery import discover
 from .engine import validate_runners
-from .errors import HarnessError
+from .errors import RoundtableError
 from .insights import build_state
 from .models import Plan
 from .store import Store
@@ -96,9 +96,9 @@ def make_server(store: Store, *, host: str = "127.0.0.1", port: int = 8787) -> t
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError as e:
-                raise HarnessError(f"request body is not valid JSON: {e}") from e
+                raise RoundtableError(f"request body is not valid JSON: {e}") from e
             if not isinstance(data, dict):
-                raise HarnessError("request body must be a JSON object")
+                raise RoundtableError("request body must be a JSON object")
             return data
 
         def _guard_origin(self) -> bool:
@@ -132,7 +132,7 @@ def make_server(store: Store, *, host: str = "127.0.0.1", port: int = 8787) -> t
                 body = self._read_body() if method in ("POST", "PUT") else {}
                 code, obj = handler(store, body, query)
                 self._json(code, obj)
-            except (HarnessError, ValidationError, yaml.YAMLError) as e:
+            except (RoundtableError, ValidationError, yaml.YAMLError) as e:
                 self._json(400, {"ok": False, "error": str(e)})
             except FileNotFoundError as e:
                 self._json(404, {"ok": False, "error": str(e)})
@@ -156,10 +156,10 @@ def make_server(store: Store, *, host: str = "127.0.0.1", port: int = 8787) -> t
     try:
         httpd = ThreadingHTTPServer((host, port), Handler)
     except OSError as e:
-        raise HarnessError(
+        raise RoundtableError(
             f"could not start the dashboard on {host}:{port} ({e.strerror or e}); "
             f"the port is likely in use by another app — retry with "
-            f"`harness dashboard --port <other>` (e.g. 8899)"
+            f"`roundtable dashboard --port <other>` (e.g. 8899)"
         ) from e
     bound_host, bound_port = httpd.server_address[0], httpd.server_address[1]
     # Show the explicit IPv4 loopback rather than "localhost": on dual-stack hosts
@@ -227,7 +227,7 @@ def _api_approve(store: Store, body: dict, query: dict) -> Payload:
         return 404, {"ok": False, "error": "no plan to approve; generate one first"}
     plan = store.load_plan()
     config = load_config(store.root)
-    validate_runners(plan, config)  # HarnessError -> 400 with the problem list
+    validate_runners(plan, config)  # RoundtableError -> 400 with the problem list
     plan.approved = True
     store.save_plan(plan)
     store.record_event("plan_approved", message="plan approved")
@@ -251,7 +251,7 @@ def _api_stop(store: Store, body: dict, query: dict) -> Payload:
 def _api_resume(store: Store, body: dict, query: dict) -> Payload:
     task_id = body.get("task")
     if not task_id:
-        raise HarnessError("missing 'task' in request body")
+        raise RoundtableError("missing 'task' in request body")
     msg = runctl.approve_hitl(store, str(task_id))
     return 200, {"ok": True, "message": msg}
 
@@ -266,7 +266,7 @@ def _api_init(store: Store, body: dict, query: dict) -> Payload:
     return 200, {
         "ok": True,
         "created_config": created,
-        "message": f"initialized harness in {store.root}"
+        "message": f"initialized roundtable in {store.root}"
         + ("" if created else " (config already existed)"),
     }
 
@@ -283,7 +283,7 @@ def _api_config_get(store: Store, body: dict, query: dict) -> Payload:
 def _api_config_put(store: Store, body: dict, query: dict) -> Payload:
     text = body.get("text")
     if not isinstance(text, str):
-        raise HarnessError("missing 'text' (the YAML config content) in request body")
+        raise RoundtableError("missing 'text' (the YAML config content) in request body")
     Config.model_validate(yaml.safe_load(text) or {})  # reject invalid configs
     (store.root / CONFIG_FILENAME).write_text(text)
     return 200, {"ok": True, "message": f"wrote {CONFIG_FILENAME}"}
@@ -339,7 +339,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>llm-harness dashboard</title>
+<title>Roundtable dashboard</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -399,7 +399,7 @@ PAGE = r"""<!doctype html>
 </head>
 <body>
 <header>
-  <h1>LLM-HARNESS <span id="conn">connecting…</span></h1>
+  <h1>LLM-ROUNDTABLE <span id="conn">connecting…</span></h1>
   <div class="goal" id="goal">—</div>
   <div>status <span id="badge" class="badge pending">—</span>
        <span id="counts" class="meta"></span></div>
@@ -450,7 +450,7 @@ async function tick() {
   try { st = await (await fetch("/api/state", {cache:"no-store"})).json(); }
   catch (e) { $("conn").textContent = "● disconnected"; $("conn").className = "off"; return; }
   $("conn").textContent = "● live"; $("conn").className = "";
-  if (!st.exists) { $("goal").textContent = "no plan yet — run `harness plan`"; return; }
+  if (!st.exists) { $("goal").textContent = "no plan yet — run `roundtable plan`"; return; }
 
   $("goal").textContent = st.goal;
   const t = st.totals;

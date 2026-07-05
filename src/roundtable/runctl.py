@@ -2,14 +2,14 @@
 
 One place owns the ``run.pid`` protocol:
 
-* a live run writes its pid to ``.harness/runs/run.pid`` and clears it on exit;
+* a live run writes its pid to ``.roundtable/runs/run.pid`` and clears it on exit;
 * starting a run (attached or detached) first checks for a live pid and refuses
   to double-launch;
 * ``stop_run`` SIGTERMs the recorded pid.
 
-Detached launches (MCP / REST) spawn ``python -m harness.cli run`` in a new
+Detached launches (MCP / REST) spawn ``python -m roundtable.cli run`` in a new
 session so the run outlives the server that started it; its output is appended
-to ``.harness/runs/run.out`` for later inspection. Plan generation can likewise
+to ``.roundtable/runs/run.out`` for later inspection. Plan generation can likewise
 be launched detached (``start_plan``) since planning may take minutes.
 """
 
@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .errors import HarnessError
+from .errors import RoundtableError
 from .store import Store
 
 
@@ -65,7 +65,7 @@ def _detached(cmd: list[str], log_path: Path) -> subprocess.Popen:
 
 
 def start_run(store: Store, *, approve: bool = False) -> tuple[int | None, str]:
-    """Spawn a detached ``harness run``; returns ``(pid, message)``.
+    """Spawn a detached ``roundtable run``; returns ``(pid, message)``.
 
     ``pid`` is None when the launch was refused (a run is already live).
     """
@@ -76,7 +76,7 @@ def start_run(store: Store, *, approve: bool = False) -> tuple[int | None, str]:
             "stop it first or wait for it to finish"
         )
     cmd = [
-        sys.executable, "-m", "harness.cli", "run",
+        sys.executable, "-m", "roundtable.cli", "run",
         "--project", str(store.root), "--no-watch", "--no-dashboard",
     ]
     if approve:
@@ -110,16 +110,16 @@ def approve_hitl(store: Store, task_id: str) -> str:
     """Approve a waiting HITL checkpoint so the paused run continues."""
     checkpoint = store.hitl_path(task_id)
     if not checkpoint.exists():
-        raise HarnessError(
+        raise RoundtableError(
             f"no pending approval checkpoint for task {task_id!r}; "
             f"is the run paused and waiting at that task?"
         )
     try:
         data = json.loads(checkpoint.read_text())
     except (ValueError, OSError) as e:
-        raise HarnessError(f"could not read checkpoint for task {task_id!r}: {e}") from e
+        raise RoundtableError(f"could not read checkpoint for task {task_id!r}: {e}") from e
     if data.get("status") != "waiting":
-        raise HarnessError(
+        raise RoundtableError(
             f"task {task_id!r} checkpoint has status {data.get('status')!r}, expected 'waiting'"
         )
     data["status"] = "approved"
@@ -146,13 +146,13 @@ def start_plan(
     plan_file: str | None = None,
     model: str | None = None,
 ) -> tuple[int | None, str]:
-    """Spawn a detached ``harness plan``; returns ``(pid, message)``."""
+    """Spawn a detached ``roundtable plan``; returns ``(pid, message)``."""
     pid = plan_pid(store)
     if pid is not None:
         return None, f"plan generation already in progress (pid={pid})"
     if not (goal or prd or plan_file):
-        raise HarnessError("nothing to plan from: pass goal, prd, or plan_file")
-    cmd = [sys.executable, "-m", "harness.cli", "plan", "--project", str(store.root)]
+        raise RoundtableError("nothing to plan from: pass goal, prd, or plan_file")
+    cmd = [sys.executable, "-m", "roundtable.cli", "plan", "--project", str(store.root)]
     if goal:
         cmd += ["--goal", goal]
     if prd:

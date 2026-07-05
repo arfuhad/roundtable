@@ -1,6 +1,6 @@
 """Codebase digest: pruning, key-file inlining, stack detection, budgets."""
 
-from harness.scan import build_digest, detect_stack
+from roundtable.scan import build_digest, detect_stack
 
 
 def _make_project(root):

@@ -1,23 +1,23 @@
 """Command-line interface.
 
-    harness init    [dir]                 scaffold .harness/ + default config;
+    roundtable init    [dir]                 scaffold .roundtable/ + default config;
                                           lists installed CLIs and their models
-    harness agents                        list configured agents + their models
-    harness map                           scan an existing project into docs + a PRD
-    harness plan    --goal "..."          plan from a goal
-    harness plan    --prd FILE            plan from a PRD / requirements file
-    harness plan    --plan FILE           ingest an existing plan (JSON or doc)
-    harness approve                       approve the plan (the human gate)
-    harness run                           execute all phases autonomously
+    roundtable agents                        list configured agents + their models
+    roundtable map                           scan an existing project into docs + a PRD
+    roundtable plan    --goal "..."          plan from a goal
+    roundtable plan    --prd FILE            plan from a PRD / requirements file
+    roundtable plan    --plan FILE           ingest an existing plan (JSON or doc)
+    roundtable approve                       approve the plan (the human gate)
+    roundtable run                           execute all phases autonomously
                                           (live web dashboard + inline progress)
-    harness status                        show phase/task progress
-    harness dashboard                     live web dashboard (stdlib http.server)
-    harness watch                         live terminal dashboard
-    harness mcp                           start the MCP server (stdio)
+    roundtable status                        show phase/task progress
+    roundtable dashboard                     live web dashboard (stdlib http.server)
+    roundtable watch                         live terminal dashboard
+    roundtable mcp                           start the MCP server (stdio)
 
-Designed to run *inside an existing project*: all harness artifacts live under
-``.harness/`` and agents run with the project directory as their working dir, so
-they read and edit the real files. After ``plan``, review ``.harness/plan/PLAN.md``;
+Designed to run *inside an existing project*: all roundtable artifacts live under
+``.roundtable/`` and agents run with the project directory as their working dir, so
+they read and edit the real files. After ``plan``, review ``.roundtable/plan/PLAN.md``;
 ``run`` refuses until ``approve``.
 """
 
@@ -38,7 +38,7 @@ from .config import Config, load_config, write_default_config
 from .dashboard import make_server
 from .discovery import AgentStatus, discover
 from .engine import Engine
-from .errors import HarnessError
+from .errors import RoundtableError
 from .insights import build_state, render_text
 from .llm import CLIProvider, LiteLLMProvider, LLMProvider, ScriptedProvider
 from .models import AgentRef, Plan, Status
@@ -56,7 +56,7 @@ def build_provider(config: Config, cwd: Path | str | None = None) -> LLMProvider
         return ScriptedProvider()
     if config.provider == "litellm":
         return LiteLLMProvider(max_retries=config.defaults.max_retries)
-    raise HarnessError(f"unknown provider {config.provider!r} (use 'cli', 'litellm', or 'scripted')")
+    raise RoundtableError(f"unknown provider {config.provider!r} (use 'cli', 'litellm', or 'scripted')")
 
 
 def _role_models(config: Config) -> dict[str, AgentRef]:
@@ -104,7 +104,7 @@ async def make_plan(
         combined = "\n\n".join(x for x in [goal or "", prd_text] if x).strip()
         plan = await planner.create_plan(combined, allowed, roles)
     else:
-        raise HarnessError("nothing to plan from: pass --goal, --prd, or --plan")
+        raise RoundtableError("nothing to plan from: pass --goal, --prd, or --plan")
 
     # Backfill metadata + role defaults; normalize indices; re-validate the graph.
     if goal:
@@ -141,7 +141,7 @@ async def map_project(
     max_files: int = 400,
     max_bytes: int = 60000,
 ) -> tuple[str, str]:
-    """Scan ``target`` and write ARCHITECTURE.md + PRD.md to ``.harness/docs/``."""
+    """Scan ``target`` and write ARCHITECTURE.md + PRD.md to ``.roundtable/docs/``."""
     provider = build_provider(config, target)  # cwd = scanned project
     ref = AgentRef.model_validate(analyst_model) if analyst_model else config.models.main
     store.scaffold()
@@ -174,7 +174,7 @@ def _print_agents(statuses: list[AgentStatus], *, limit: int | None = None) -> N
             for m in shown:
                 print(f"          {m}")
             if limit is not None and len(st.models) > limit:
-                print(f"          … (+{len(st.models) - limit} more — run `harness agents`)")
+                print(f"          … (+{len(st.models) - limit} more — run `roundtable agents`)")
         else:
             print(f"  [x] {st.name}  ({st.binary}) — models: n/a ({st.note})")
 
@@ -184,22 +184,22 @@ def cmd_init(args: argparse.Namespace) -> int:
     root.mkdir(parents=True, exist_ok=True)
     store = Store(root)
     store.scaffold()
-    cfg_path = root / "harness.config.yaml"
+    cfg_path = root / "roundtable.config.yaml"
     if cfg_path.exists() and not args.force:
         print(f"config already exists: {cfg_path} (use --force to overwrite)")
     else:
         write_default_config(root)
         print(f"wrote {cfg_path}")
-    print(f"initialized harness in {root} (artifacts under {store.base})")
+    print(f"initialized roundtable in {root} (artifacts under {store.base})")
 
     config = load_config(root)
     if config.provider == "cli" and not args.no_models:
         print("\navailable agents & models (probing installed CLIs — Ctrl-C or --no-models to skip):")
         statuses = asyncio.run(discover(config.agents, timeout=args.models_timeout))
         _print_agents(statuses, limit=8)
-        print("\nassign an agent:model to each role in harness.config.yaml under `models:`.")
+        print("\nassign an agent:model to each role in roundtable.config.yaml under `models:`.")
 
-    print("next: edit harness.config.yaml, then `harness plan --goal \"...\"` "
+    print("next: edit roundtable.config.yaml, then `roundtable plan --goal \"...\"` "
           "(or --prd FILE / --plan FILE)")
     return 0
 
@@ -233,7 +233,7 @@ def cmd_map(args: argparse.Namespace) -> int:
     print(f"mapped {target}")
     print(f"wrote {store.docs_dir / 'ARCHITECTURE.md'} and {prd_path}")
     print(f"review/edit {prd_path}, then: "
-          f"harness plan --prd {prd_path} --project {args.project}")
+          f"roundtable plan --prd {prd_path} --project {args.project}")
     return 0
 
 
@@ -249,7 +249,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     for p in plan.phases:
         print(f"  [{p.id}] {p.title}  ({len(p.tasks)} task(s), runner={p.runner})")
     print(f"\nwrote {store.manifest_path}")
-    print(f"review {store.plan_dir / 'PLAN.md'}, then: harness approve --project {args.project}")
+    print(f"review {store.plan_dir / 'PLAN.md'}, then: roundtable approve --project {args.project}")
     return 0
 
 
@@ -259,7 +259,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
     plan = store.load_plan()
     plan.approved = True
     store.save_plan(plan)
-    print("plan approved. run it with: harness run --project", args.project)
+    print("plan approved. run it with: roundtable run --project", args.project)
     return 0
 
 
@@ -272,7 +272,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if existing is not None:
         print(
             f"error: a run is already in progress (pid={existing}); "
-            "wait for it or cancel it with `harness stop`",
+            "wait for it or cancel it with `roundtable stop`",
             file=sys.stderr,
         )
         return 2
@@ -285,7 +285,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 plan.approved = True
                 store.save_plan(plan)
                 print("plan auto-approved via --approve flag.")
-        except (FileNotFoundError, HarnessError):
+        except (FileNotFoundError, RoundtableError):
             pass
 
     provider = build_provider(config, root)
@@ -294,7 +294,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         return asyncio.run(_run_with_progress(engine, store, args))
     except KeyboardInterrupt:
-        print("\ninterrupted — re-run `harness run` to resume", file=sys.stderr)
+        print("\ninterrupted — re-run `roundtable run` to resume", file=sys.stderr)
         return 130
     finally:
         store.clear_run_pid()
@@ -315,7 +315,7 @@ async def _run_with_progress(engine: Engine, store: Store, args: argparse.Namesp
             if args.open:
                 import webbrowser
                 webbrowser.open(url)
-        except HarnessError as e:
+        except RoundtableError as e:
             print(f"(web dashboard unavailable: {e})", file=sys.stderr)
 
     def banner() -> str:
@@ -391,7 +391,7 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     store = Store(Path(args.project).resolve())
     httpd, url = make_server(store, host=args.host, port=args.port)
     print(f"dashboard live at {url}  (Ctrl-C to stop)")
-    print("watching .harness/ — run `harness run` in another terminal to see it update")
+    print("watching .roundtable/ — run `roundtable run` in another terminal to see it update")
     if args.open:
         import webbrowser
         webbrowser.open(url)
@@ -408,14 +408,14 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     """Dashboard + REST control API with a machine-readable first line.
 
-    The desktop app spawns `harness serve --project X --port 0` and parses the
+    The desktop app spawns `roundtable serve --project X --port 0` and parses the
     first stdout line (JSON) for the URL; humans get a friendly line after it.
     """
     import json as _json
     store = Store(Path(args.project).resolve())
     httpd, url = make_server(store, host=args.host, port=args.port)
     print(_json.dumps({"event": "serving", "url": url, "project": str(store.root)}), flush=True)
-    print(f"harness API + dashboard live at {url}  (Ctrl-C to stop)", flush=True)
+    print(f"roundtable API + dashboard live at {url}  (Ctrl-C to stop)", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -443,7 +443,7 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     try:
         from .mcp import run_server
     except ImportError:
-        print("error: 'mcp' package not installed — run: pip install 'llm-harness[mcp]'",
+        print("error: 'mcp' package not installed — run: pip install 'roundtable-cli[mcp]'",
               file=sys.stderr)
         return 2
     run_server()
@@ -453,7 +453,7 @@ def cmd_mcp(args: argparse.Namespace) -> int:
 def cmd_watch(args: argparse.Namespace) -> int:
     store = Store(Path(args.project).resolve())
     if not store.has_plan():
-        raise HarnessError("no plan to watch; run `harness plan` first")
+        raise RoundtableError("no plan to watch; run `roundtable plan` first")
     try:
         while True:
             state = build_state(store)
@@ -469,11 +469,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="harness", description="Multi-LLM planning & orchestration harness")
+    p = argparse.ArgumentParser(prog="roundtable", description="Multi-LLM planning & orchestration tool")
     p.add_argument("-v", "--verbose", action="store_true", help="enable verbose/debug logging")
     sub = p.add_subparsers(dest="command", required=True)
 
-    sp = sub.add_parser("init", help="scaffold .harness/ + default config")
+    sp = sub.add_parser("init", help="scaffold .roundtable/ + default config")
     sp.add_argument("dir", nargs="?", default=".")
     sp.add_argument("--force", action="store_true", help="overwrite an existing config")
     sp.add_argument("--no-models", action="store_true",
@@ -490,7 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_agents)
 
     sp = sub.add_parser("map", help="scan an existing project into outline docs + a PRD to confirm")
-    sp.add_argument("--project", default=".", help="harness root (where .harness/ lives)")
+    sp.add_argument("--project", default=".", help="roundtable root (where .roundtable/ lives)")
     sp.add_argument("--target", default=None,
                     help="codebase to scan (default: the project root)")
     sp.add_argument("--model", default=None,
@@ -567,7 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--project", default=".")
     sp.set_defaults(func=cmd_stop)
 
-    sp = sub.add_parser("mcp", help="start the harness MCP server over stdio (requires mcp extra)")
+    sp = sub.add_parser("mcp", help="start the roundtable MCP server over stdio (requires mcp extra)")
     sp.set_defaults(func=cmd_mcp)
     return p
 
@@ -579,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
     try:
         return args.func(args)
-    except HarnessError as e:
+    except RoundtableError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
     except FileNotFoundError as e:

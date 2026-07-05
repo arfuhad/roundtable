@@ -1,7 +1,7 @@
 import json
 
-from harness.models import Phase, Plan, Task
-from harness.store import Store, render_plan_md
+from roundtable.models import Phase, Plan, Task
+from roundtable.store import Store, render_plan_md
 
 
 def _plan():

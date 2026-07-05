@@ -5,9 +5,9 @@ import threading
 import urllib.error
 import urllib.request
 
-from harness.dashboard import make_server
-from harness.models import Phase, Plan, Task
-from harness.store import Store
+from roundtable.dashboard import make_server
+from roundtable.models import Phase, Plan, Task
+from roundtable.store import Store
 
 
 def _serve(store):
@@ -152,7 +152,7 @@ def test_init_and_config_roundtrip(tmp_path):
     try:
         code, res = _req(url + "/api/init", "POST", {})
         assert code == 200 and res["created_config"]
-        assert (tmp_path / "harness.config.yaml").exists()
+        assert (tmp_path / "roundtable.config.yaml").exists()
         assert store.plan_dir.exists()
 
         code, cfg = _req(url + "/api/config")
@@ -160,7 +160,7 @@ def test_init_and_config_roundtrip(tmp_path):
 
         code, res = _req(url + "/api/config", "PUT", {"text": "provider: scripted\n"})
         assert code == 200 and res["ok"]
-        assert (tmp_path / "harness.config.yaml").read_text() == "provider: scripted\n"
+        assert (tmp_path / "roundtable.config.yaml").read_text() == "provider: scripted\n"
 
         # invalid YAML and invalid schema are both rejected without writing
         code, res = _req(url + "/api/config", "PUT", {"text": "provider: [unclosed"})
@@ -168,7 +168,7 @@ def test_init_and_config_roundtrip(tmp_path):
         code, res = _req(url + "/api/config", "PUT",
                          {"text": "defaults:\n  max_concurrency: 0\n"})
         assert code == 400
-        assert (tmp_path / "harness.config.yaml").read_text() == "provider: scripted\n"
+        assert (tmp_path / "roundtable.config.yaml").read_text() == "provider: scripted\n"
     finally:
         httpd.shutdown()
         httpd.server_close()

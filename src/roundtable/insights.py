@@ -154,7 +154,7 @@ def build_state(store: Store, *, event_limit: int = 40) -> dict[str, Any]:
 def render_text(state: dict[str, Any], *, width: int = 64) -> str:
     """Compact terminal rendering of a state snapshot."""
     if not state.get("exists"):
-        return "no plan yet — run `harness plan` first"
+        return "no plan yet — run `roundtable plan` first"
 
     t = state["totals"]
     badge = {"running": "● running", "done": "✓ done",
@@ -163,7 +163,7 @@ def render_text(state: dict[str, Any], *, width: int = 64) -> str:
     bar = "█" * filled + "░" * (width - 2 - filled)
 
     lines = [
-        f"llm-harness   {badge}    {t['done']}/{t['tasks']} tasks · {t['percent']}%",
+        f"Roundtable   {badge}    {t['done']}/{t['tasks']} tasks · {t['percent']}%",
         f"Goal: {state['goal']}",
         f"[{bar}]",
         "",

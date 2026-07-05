@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from .config import AgentSpec
-from .errors import HarnessError
+from .errors import RoundtableError
 
 
 @runtime_checkable
@@ -220,8 +220,8 @@ class LiteLLMProvider:
         try:
             import litellm  # lazy: only the litellm backend needs it
         except ModuleNotFoundError as e:
-            raise HarnessError(
-                "provider 'litellm' needs the litellm package: pip install 'llm-harness[litellm]' "
+            raise RoundtableError(
+                "provider 'litellm' needs the litellm package: pip install 'roundtable-cli[litellm]' "
                 "(the default 'cli' provider needs no extra deps)"
             ) from e
 
@@ -317,8 +317,8 @@ class CLIProvider:
 
         spec = self.agents.get(agent_key)
         if spec is None:
-            raise HarnessError(
-                f"agent {agent_key!r} is not defined under `agents:` in harness.config.yaml; "
+            raise RoundtableError(
+                f"agent {agent_key!r} is not defined under `agents:` in roundtable.config.yaml; "
                 f"available: {', '.join(sorted(self.agents)) or '(none)'}"
             )
         if json_mode:
@@ -327,7 +327,7 @@ class CLIProvider:
         argv, stdin_data = _render_command(spec, system, user, model_token)
         exe = shutil.which(argv[0])
         if exe is None:
-            raise HarnessError(
+            raise RoundtableError(
                 f"agent {agent_key!r}: command {argv[0]!r} not found on PATH "
                 f"(install it or fix `agents.{agent_key}.command`)"
             )
@@ -441,7 +441,7 @@ class CLIProvider:
             import pty as _pty
             import os as _os
         except ImportError:
-            raise HarnessError("pty mode requires the 'pty' stdlib module (Unix/macOS only)")
+            raise RoundtableError("pty mode requires the 'pty' stdlib module (Unix/macOS only)")
 
         master_fd, slave_fd = _pty.openpty()
         proc = await asyncio.create_subprocess_exec(

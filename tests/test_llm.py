@@ -1,7 +1,7 @@
 import pytest
 
-from harness.llm import ScriptedProvider, extract_json
-from harness.models import Plan
+from roundtable.llm import ScriptedProvider, extract_json
+from roundtable.models import Plan
 
 
 def test_extract_json_raw_fenced_and_prose():
@@ -28,8 +28,8 @@ def test_extract_json_failure():
 
 
 async def test_cli_provider_streams_output(tmp_path):
-    from harness.config import AgentSpec
-    from harness.llm import CLIProvider
+    from roundtable.config import AgentSpec
+    from roundtable.llm import CLIProvider
 
     spec = AgentSpec(command=["sh", "-c", "printf 'alpha\\nbeta\\ngamma\\n'"])
     provider = CLIProvider({"echo": spec}, cwd=tmp_path)
@@ -45,8 +45,8 @@ async def test_cli_provider_streams_output(tmp_path):
 
 
 async def test_cli_provider_estimates_tokens(tmp_path):
-    from harness.config import AgentSpec
-    from harness.llm import CLIProvider, estimate_tokens
+    from roundtable.config import AgentSpec
+    from roundtable.llm import CLIProvider, estimate_tokens
 
     spec = AgentSpec(command=["sh", "-c", "printf 'some response text here'"])
     provider = CLIProvider({"echo": spec}, cwd=tmp_path)
@@ -62,8 +62,8 @@ async def test_cli_provider_estimates_tokens(tmp_path):
 
 
 async def test_cli_provider_nonzero_exit_raises(tmp_path):
-    from harness.config import AgentSpec
-    from harness.llm import CLIProvider
+    from roundtable.config import AgentSpec
+    from roundtable.llm import CLIProvider
 
     spec = AgentSpec(command=["sh", "-c", "echo boom >&2; exit 2"])
     provider = CLIProvider({"bad": spec}, cwd=tmp_path, max_retries=0)

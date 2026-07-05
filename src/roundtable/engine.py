@@ -25,12 +25,12 @@ import logging
 
 from .agents import MainOrchestrator, PhaseOrchestrator, TaskAgent
 from .config import Config
-from .errors import HarnessError, TaskFailed
+from .errors import RoundtableError, TaskFailed
 from .llm import CLIProvider, LLMProvider
 from .models import AgentRef, Phase, Plan, Status, Task
 from .store import Store
 
-logger = logging.getLogger("harness")
+logger = logging.getLogger("roundtable")
 
 
 def validate_runners(plan: Plan, config: Config) -> None:
@@ -57,7 +57,7 @@ def validate_runners(plan: Plan, config: Config) -> None:
         for t in p.tasks:
             check(f"task {t.id}", t.runner)
     if problems:
-        raise HarnessError(
+        raise RoundtableError(
             "plan cannot run with the current config:\n  - "
             + "\n  - ".join(problems)
             + f"\n  available agents: {', '.join(sorted(config.agents)) or '(none)'}"
@@ -75,7 +75,7 @@ class Engine:
     async def run(self) -> Plan:
         plan = self.store.load_plan()
         if not plan.approved:
-            raise HarnessError("plan is not approved; run `harness approve` first")
+            raise RoundtableError("plan is not approved; run `roundtable approve` first")
         if isinstance(self.provider, CLIProvider):
             # Agent lookups only happen on the CLI backend; a scripted/litellm
             # provider ignores the agents map entirely.
@@ -112,7 +112,7 @@ class Engine:
         if changed:
             self.store.save_plan(plan)
         self.store.record_event(
-            "run_interrupted", message="run interrupted — re-run `harness run` to resume"
+            "run_interrupted", message="run interrupted — re-run `roundtable run` to resume"
         )
 
     async def _run(self, plan: Plan) -> Plan:
@@ -423,7 +423,7 @@ class Engine:
                         project_context=project_ctx, on_output=_on_output,
                     )
                     break  # success — exit retry loop
-                except HarnessError as e:
+                except RoundtableError as e:
                     # Configuration problems (unknown agent, pty unsupported, …)
                     # are not transient — fail the task immediately, no retry.
                     last_error = str(e)
@@ -489,7 +489,7 @@ class Engine:
             self.store.save_plan(plan)
 
     async def _wait_for_approval(self, plan: Plan, task: Task) -> None:
-        """Write a HITL checkpoint and block until `harness resume` approves it."""
+        """Write a HITL checkpoint and block until `roundtable resume` approves it."""
         checkpoint = self.store.hitl_path(task.id)
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         checkpoint.write_text(
@@ -506,12 +506,12 @@ class Engine:
         )
         logger.info(
             "Task [%s] '%s' requires approval. "
-            "Run: harness resume --task %s --project %s",
+            "Run: roundtable resume --task %s --project %s",
             task.id, task.title, task.id, self.store.root,
         )
         print(
-            f"\n[harness] Task [{task.id}] '{task.title}' requires approval.\n"
-            f"  Run: harness resume --task {task.id} --project {self.store.root}\n"
+            f"\n[roundtable] Task [{task.id}] '{task.title}' requires approval.\n"
+            f"  Run: roundtable resume --task {task.id} --project {self.store.root}\n"
             f"  Waiting…\n",
             flush=True,
         )

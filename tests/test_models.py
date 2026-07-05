@@ -1,8 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from harness.models import AgentRef, Phase, Plan, Status, Task, slugify
-from harness.errors import HarnessError
+from roundtable.models import AgentRef, Phase, Plan, Status, Task, slugify
+from roundtable.errors import RoundtableError
 
 
 def test_agentref_coercion_object_string_and_bare():
@@ -55,7 +55,7 @@ def test_topological_order_respects_deps():
 
 
 def test_cycle_detected():
-    with pytest.raises(HarnessError):
+    with pytest.raises(RoundtableError):
         Plan(goal="g", phases=[Phase(id="p1", index=1, title="P", tasks=[
             Task(id="a", title="A", depends_on=["b"]),
             Task(id="b", title="B", depends_on=["a"]),
@@ -63,14 +63,14 @@ def test_cycle_detected():
 
 
 def test_unknown_dependency_rejected():
-    with pytest.raises(HarnessError):
+    with pytest.raises(RoundtableError):
         Plan(goal="g", phases=[Phase(id="p1", index=1, title="P", tasks=[
             Task(id="a", title="A", depends_on=["does-not-exist"]),
         ])])
 
 
 def test_duplicate_ids_rejected():
-    with pytest.raises(HarnessError):
+    with pytest.raises(RoundtableError):
         Plan(goal="g", phases=[Phase(id="p1", index=1, title="P", tasks=[
             Task(id="a", title="A"),
             Task(id="a", title="A2"),
@@ -88,7 +88,7 @@ def test_cross_phase_dependency_on_earlier_phase_allowed():
 
 def test_cross_phase_forward_reference_rejected():
     # A phase-1 task may not depend on a phase-2 task (later phase).
-    with pytest.raises(HarnessError, match="later phase"):
+    with pytest.raises(RoundtableError, match="later phase"):
         Plan(goal="g", phases=[
             Phase(id="p1", index=1, title="One",
                   tasks=[Task(id="p1-t1", title="A", depends_on=["p2-t1"])]),
@@ -98,7 +98,7 @@ def test_cross_phase_forward_reference_rejected():
 
 def test_duplicate_task_id_across_phases_rejected():
     # Task ids must be unique plan-wide so cross-phase deps resolve unambiguously.
-    with pytest.raises(HarnessError):
+    with pytest.raises(RoundtableError):
         Plan(goal="g", phases=[
             Phase(id="p1", index=1, title="One", tasks=[Task(id="dup", title="A")]),
             Phase(id="p2", index=2, title="Two", tasks=[Task(id="dup", title="B")]),

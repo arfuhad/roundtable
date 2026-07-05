@@ -1,4 +1,4 @@
-"""llm-harness: a multi-LLM planning and orchestration harness.
+"""roundtable: a multi-LLM planning and orchestration tool.
 
 Flow: Planner LLM -> approved Plan (phases -> tasks) -> Main
 Orchestrator drives phases; each Phase Orchestrator (fresh context) dispatches

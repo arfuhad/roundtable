@@ -2,9 +2,9 @@
 
 import pytest
 
-from harness.config import AgentSpec
-from harness.errors import HarnessError
-from harness.llm import CLIProvider, _render_command
+from roundtable.config import AgentSpec
+from roundtable.errors import RoundtableError
+from roundtable.llm import CLIProvider, _render_command
 
 
 def test_render_command_combines_system_when_no_placeholder():
@@ -50,7 +50,7 @@ async def test_cli_provider_passes_agent_and_model():
 
 async def test_cli_provider_unknown_agent_key_reports_agent():
     provider = CLIProvider({"claude": AgentSpec(command=["true"])})
-    with pytest.raises(HarnessError, match="'opencode' is not defined"):
+    with pytest.raises(RoundtableError, match="'opencode' is not defined"):
         await provider.complete(agent="opencode", model="x", system="", user="y")
 
 
@@ -75,13 +75,13 @@ async def test_cli_provider_runs_in_project_cwd(tmp_path):
 
 async def test_cli_provider_unknown_agent():
     provider = CLIProvider({"a": AgentSpec(command=["true"])})
-    with pytest.raises(HarnessError, match="not defined"):
+    with pytest.raises(RoundtableError, match="not defined"):
         await provider.complete(model="missing", system="", user="x")
 
 
 async def test_cli_provider_command_not_found():
     provider = CLIProvider({"nope": AgentSpec(command=["definitely-not-a-real-binary-xyz"])})
-    with pytest.raises(HarnessError, match="not found on PATH"):
+    with pytest.raises(RoundtableError, match="not found on PATH"):
         await provider.complete(model="nope", system="", user="x")
 
 

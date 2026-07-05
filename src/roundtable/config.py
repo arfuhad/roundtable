@@ -1,6 +1,6 @@
-"""Harness configuration: which backend, which model/agent per role, runtime knobs.
+"""Roundtable configuration: which backend, which model/agent per role, runtime knobs.
 
-Loaded from ``harness.config.yaml`` at the project root.
+Loaded from ``roundtable.config.yaml`` at the project root.
 
 Three backends (``provider``):
 
@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from .models import AgentRef
 
-CONFIG_FILENAME = "harness.config.yaml"
+CONFIG_FILENAME = "roundtable.config.yaml"
 
 
 def _ref(agent: str) -> AgentRef:
@@ -53,7 +53,7 @@ class AgentSpec(BaseModel):
 
     ``models_command`` is an optional argv that lists the models this CLI offers
     (e.g. ``["opencode", "models"]``, ``["agy", "models"]``, ``["ollama",
-    "list"]``); ``harness init`` / ``harness agents`` runs it to show you what you
+    "list"]``); ``roundtable init`` / ``roundtable agents`` runs it to show you what you
     can assign. Omit it for tools with no enumeration command (claude, codex).
     """
 
@@ -74,7 +74,7 @@ class Defaults(BaseModel):
 
 # No-config fallback agents. Kept model-less so the bare-agent role defaults
 # (ModelRoles -> agent only) work without an empty {model} argument. The richer
-# {model}-templated commands live in DEFAULT_CONFIG_YAML that `harness init` writes.
+# {model}-templated commands live in DEFAULT_CONFIG_YAML that `roundtable init` writes.
 DEFAULT_AGENTS: dict[str, AgentSpec] = {
     # Claude Code, non-interactive print mode.
     "claude": AgentSpec(command=["claude", "-p", "{prompt}"]),
@@ -94,7 +94,7 @@ class Config(BaseModel):
 
 
 DEFAULT_CONFIG_YAML = """\
-# llm-harness configuration.
+# roundtable configuration.
 
 # Backend:
 #   cli      -> reach other LLMs through their terminal CLIs (default)
@@ -121,7 +121,7 @@ models:
 # prepended to the prompt. Set stdin: true to pipe the prompt on stdin instead
 # of via {prompt}. Add whatever flags your tool needs to run non-interactively
 # and edit files (these flags are illustrative -- check each tool's own docs).
-# Optional models_command lists that CLI's models; `harness init` / `harness
+# Optional models_command lists that CLI's models; `roundtable init` / `roundtable
 # agents` runs it so you can see what to assign above.
 agents:
   claude:

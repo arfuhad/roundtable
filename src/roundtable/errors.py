@@ -1,13 +1,13 @@
-"""Harness-specific exceptions."""
+"""Roundtable-specific exceptions."""
 
 from __future__ import annotations
 
 
-class HarnessError(Exception):
-    """Base class for expected, user-facing harness errors."""
+class RoundtableError(Exception):
+    """Base class for expected, user-facing roundtable errors."""
 
 
-class TaskFailed(HarnessError):
+class TaskFailed(RoundtableError):
     """A task exhausted its retries or failed validation.
 
     Raised inside ``_run_task`` and caught per-task in ``_schedule`` so that

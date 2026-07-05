@@ -1,16 +1,16 @@
-"""`harness run` live progress: web dashboard link + inline terminal watch view."""
+"""`roundtable run` live progress: web dashboard link + inline terminal watch view."""
 
 import argparse
 import asyncio
 import contextlib
 import io
 
-from harness.cli import _run_with_progress, make_plan
-from harness.config import Config
-from harness.engine import Engine
-from harness.llm import ScriptedProvider
-from harness.models import Status
-from harness.store import Store
+from roundtable.cli import _run_with_progress, make_plan
+from roundtable.config import Config
+from roundtable.engine import Engine
+from roundtable.llm import ScriptedProvider
+from roundtable.models import Status
+from roundtable.store import Store
 
 
 def _approved_scripted_plan(tmp_path):
@@ -42,7 +42,7 @@ def test_run_renders_live_terminal_frames(tmp_path):
 
     assert rc == 0
     assert "\x1b[2J" in out          # cleared/redrawn at least once
-    assert "llm-harness" in out      # the watch header was rendered
+    assert "Roundtable" in out      # the watch header was rendered
     assert "run complete" in out
     assert store.load_plan().status == Status.done
 

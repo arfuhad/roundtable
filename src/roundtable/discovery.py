@@ -3,8 +3,8 @@
 CLI detection is reliable (a PATH lookup). Model listing is best-effort: only
 agents with a ``models_command`` can be enumerated, and those commands often hit
 the network/auth and can be slow — so each runs with a bounded timeout and any
-failure degrades to a note instead of raising. Used by ``harness init`` and
-``harness agents`` to show what you can assign to roles.
+failure degrades to a note instead of raising. Used by ``roundtable init`` and
+``roundtable agents`` to show what you can assign to roles.
 """
 
 from __future__ import annotations

@@ -1,27 +1,27 @@
-"""MCP server that exposes harness operations as callable tools.
+"""MCP server that exposes roundtable operations as callable tools.
 
 Typical workflow an LLM should follow:
-  1. harness_init        — set up .harness/ if this is a fresh project
-  2. harness_plan        — generate a plan from a goal string
-  3. harness_approve     — mark the plan approved (required before run)
-  4. harness_run         — start the run (non-blocking; returns immediately)
-  5. harness_status      — poll until status == "done" or "failed"
+  1. roundtable_init        — set up .roundtable/ if this is a fresh project
+  2. roundtable_plan        — generate a plan from a goal string
+  3. roundtable_approve     — mark the plan approved (required before run)
+  4. roundtable_run         — start the run (non-blocking; returns immediately)
+  5. roundtable_status      — poll until status == "done" or "failed"
 
-Optionally call harness_map first to generate ARCHITECTURE.md + PRD.md from
+Optionally call roundtable_map first to generate ARCHITECTURE.md + PRD.md from
 an existing codebase before planning.
 
 Entry point (stdio, for Claude Code / Claude Desktop):
-    harness mcp
-    harness-mcp
+    roundtable mcp
+    roundtable-mcp
 
 Register in Claude Code .claude/settings.json:
     {
         "mcpServers": {
-            "harness": { "command": "harness-mcp" }
+            "roundtable": { "command": "roundtable-mcp" }
         }
     }
 
-Requires: pip install 'llm-harness[mcp]'
+Requires: pip install 'roundtable-cli[mcp]'
 """
 
 from __future__ import annotations
@@ -38,17 +38,17 @@ def _build_server() -> Any:
         from mcp.server.fastmcp import FastMCP  # type: ignore[import]
     except ImportError:
         print(
-            "error: 'mcp' package not installed — run: pip install 'llm-harness[mcp]'",
+            "error: 'mcp' package not installed — run: pip install 'roundtable-cli[mcp]'",
             file=sys.stderr,
         )
         sys.exit(1)
 
     mcp = FastMCP(
-        "harness",
+        "roundtable",
         instructions=(
-            "Harness orchestrates multi-agent LLM tasks. "
-            "Workflow: harness_init (once) → harness_plan → harness_approve → harness_run. "
-            "harness_run is non-blocking; poll harness_status until status is 'done' or 'failed'. "
+            "Roundtable orchestrates multi-agent LLM tasks. "
+            "Workflow: roundtable_init (once) → roundtable_plan → roundtable_approve → roundtable_run. "
+            "roundtable_run is non-blocking; poll roundtable_status until status is 'done' or 'failed'. "
             "All tools accept a `project` argument (path to the project directory; defaults to '.')."
         ),
     )
@@ -59,7 +59,7 @@ def _build_server() -> Any:
 
     def _cli(*args: str) -> str:
         r = subprocess.run(
-            ["harness", *args],
+            ["roundtable", *args],
             capture_output=True, text=True,
         )
         out = (r.stdout or "").strip()
@@ -78,24 +78,24 @@ def _build_server() -> Any:
     # ------------------------------------------------------------------ #
 
     @mcp.tool()
-    def harness_init(directory: str = ".") -> str:
-        """Initialize a .harness/ directory and default config in the given project directory."""
+    def roundtable_init(directory: str = ".") -> str:
+        """Initialize a .roundtable/ directory and default config in the given project directory."""
         return _cli("init", directory, "--no-models")
 
     @mcp.tool()
-    def harness_map(
+    def roundtable_map(
         target: str = ".",
         project: str = ".",
         model: str | None = None,
     ) -> str:
-        """Scan a codebase and generate ARCHITECTURE.md and PRD.md under .harness/docs/.
+        """Scan a codebase and generate ARCHITECTURE.md and PRD.md under .roundtable/docs/.
 
-        Use this before harness_plan when you want to base the plan on an
+        Use this before roundtable_plan when you want to base the plan on an
         existing codebase rather than a bare goal string.
 
         Args:
             target:  Path to the codebase to scan (default: project root).
-            project: Harness project root where .harness/ lives (default: '.').
+            project: Roundtable project root where .roundtable/ lives (default: '.').
             model:   Override the analyst agent/model (e.g. 'claude:opus').
         """
         args = ["map", "--project", project, "--target", target]
@@ -104,19 +104,19 @@ def _build_server() -> Any:
         return _cli(*args)
 
     @mcp.tool()
-    def harness_plan(
+    def roundtable_plan(
         goal: str,
         project: str = ".",
         model: str | None = None,
     ) -> str:
         """Generate a multi-agent execution plan from a goal string.
 
-        Writes plan.json and PLAN.md under .harness/plan/. The plan must be
-        approved with harness_approve before it can be run.
+        Writes plan.json and PLAN.md under .roundtable/plan/. The plan must be
+        approved with roundtable_approve before it can be run.
 
         Args:
             goal:    Natural-language description of what the agents should build or do.
-            project: Harness project root (default: '.').
+            project: Roundtable project root (default: '.').
             model:   Override the planner agent/model (e.g. 'claude:opus').
         """
         args = ["plan", "--goal", goal, "--project", project]
@@ -125,25 +125,25 @@ def _build_server() -> Any:
         return _cli(*args)
 
     @mcp.tool()
-    def harness_approve(project: str = ".") -> str:
-        """Approve the current plan so it can be executed by harness_run.
+    def roundtable_approve(project: str = ".") -> str:
+        """Approve the current plan so it can be executed by roundtable_run.
 
         Args:
-            project: Harness project root (default: '.').
+            project: Roundtable project root (default: '.').
         """
         return _cli("approve", "--project", project)
 
     @mcp.tool()
-    def harness_run(project: str = ".", approve: bool = False) -> str:
+    def roundtable_run(project: str = ".", approve: bool = False) -> str:
         """Start executing the approved plan in the background (non-blocking).
 
-        Returns immediately after starting the run process. Use harness_status
+        Returns immediately after starting the run process. Use roundtable_status
         to monitor progress. The run continues even if this MCP server exits.
 
         Args:
-            project: Harness project root (default: '.').
+            project: Roundtable project root (default: '.').
             approve: If True, auto-approve the plan before running (combines
-                     harness_approve + harness_run in one call).
+                     roundtable_approve + roundtable_run in one call).
         """
         from . import runctl
         from .store import Store
@@ -151,22 +151,22 @@ def _build_server() -> Any:
         store = Store(Path(project).resolve())
         pid, msg = runctl.start_run(store, approve=approve)
         if pid is None:
-            return f"error: {msg}. Call harness_status to monitor, or harness_stop to cancel."
+            return f"error: {msg}. Call roundtable_status to monitor, or roundtable_stop to cancel."
         return (
             f"Run started (pid={pid}). "
             "Agents are now executing tasks in the background. "
-            "Call harness_status() to monitor progress."
+            "Call roundtable_status() to monitor progress."
         )
 
     @mcp.tool()
-    def harness_stop(project: str = ".") -> str:
-        """Stop a running harness execution.
+    def roundtable_stop(project: str = ".") -> str:
+        """Stop a running roundtable execution.
 
         Reads the PID from the run.pid file and sends SIGTERM to gracefully
         stop the process.
 
         Args:
-            project: Harness project root (default: '.').
+            project: Roundtable project root (default: '.').
         """
         from . import runctl
         from .store import Store
@@ -176,14 +176,14 @@ def _build_server() -> Any:
         return msg
 
     @mcp.tool()
-    def harness_status(project: str = ".") -> str:
+    def roundtable_status(project: str = ".") -> str:
         """Return the current run state as JSON.
 
         Includes: overall status, per-phase/task progress, active tasks,
         per-agent stats, timing, and recent events.
 
         Args:
-            project: Harness project root (default: '.').
+            project: Roundtable project root (default: '.').
         """
         state = _read_state(project)
         return json.dumps(state, indent=2)
@@ -191,14 +191,14 @@ def _build_server() -> Any:
     # ------------------------------------------------------------------ #
     # Resources (read-only context; always operates on cwd / project='.')
     @mcp.tool()
-    def harness_usage(project: str = ".") -> str:
+    def roundtable_usage(project: str = ".") -> str:
         """Return aggregated provider usage stats (calls, tokens, duration).
 
         Reads 'usage' events from the run log and returns a summary. Only
         available after a run completes or partially completes.
 
         Args:
-            project: Harness project root (default: '.').
+            project: Roundtable project root (default: '.').
         """
         from .store import Store
 
@@ -216,22 +216,22 @@ def _build_server() -> Any:
 
     # ------------------------------------------------------------------ #
 
-    @mcp.resource("harness://plan")
+    @mcp.resource("roundtable://plan")
     def resource_plan() -> str:
         """The current plan.json — phases, tasks, runners, and approval state."""
         from .store import Store
         store = Store(Path(".").resolve())
         p = store.manifest_path
         if not p.exists():
-            return json.dumps({"error": "no plan found — call harness_plan first"})
+            return json.dumps({"error": "no plan found — call roundtable_plan first"})
         return p.read_text()
 
-    @mcp.resource("harness://state")
+    @mcp.resource("roundtable://state")
     def resource_state() -> str:
-        """Live run state snapshot (same data as harness_status tool, project='.')."""
+        """Live run state snapshot (same data as roundtable_status tool, project='.')."""
         return json.dumps(_read_state("."), indent=2)
 
-    @mcp.resource("harness://logs")
+    @mcp.resource("roundtable://logs")
     def resource_logs() -> str:
         """Last 50 run events from run.log as a JSON array (newest first)."""
         from .store import Store
@@ -243,6 +243,6 @@ def _build_server() -> Any:
 
 
 def run_server() -> None:
-    """Entry point: start the harness MCP server over stdio."""
+    """Entry point: start the roundtable MCP server over stdio."""
     server = _build_server()
     server.run()

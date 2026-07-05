@@ -1,8 +1,9 @@
-# llm-harness
+# Roundtable
 
-A small, from-scratch **multi-LLM planning and orchestration harness** that drives
-**other LLMs through their terminal CLIs** (Claude Code, Codex, Gemini CLI, aider,
-`llm`, Ollama, …).
+**Roundtable** is a small, from-scratch **multi-LLM planning and orchestration tool**
+that drives **other LLMs through their terminal CLIs** (Claude Code, Codex, Gemini CLI,
+aider, `llm`, Ollama, …) — routing each part of the work to the model you choose, so no
+single vendor's limit stalls the run.
 
 One LLM plans the work and breaks it into **phases → tasks**. You
 approve the plan. Then a **Main Orchestrator** drives execution: for each phase it
@@ -10,14 +11,14 @@ runs a fresh **Phase Orchestrator** that defines and dispatches **Task Agents**,
 collects their work, summarizes the phase, and hands the summary back to Main —
 which keeps the project docs up to date. **Every role's model/agent is choosable**,
 per role *and* per task. It runs **inside your existing project**: agents execute
-with the repo as their working directory, and all harness artifacts stay under
-`.harness/`.
+with the repo as their working directory, and all roundtable artifacts stay under
+`.roundtable/`.
 
 ```mermaid
 graph TD
   P[Planner agent] -->|plan.json| GATE{Approve?}
   GATE -->|yes| MO[Main Orchestrator]
-  MO -->|OVERVIEW.md| DOCS[(.harness/docs)]
+  MO -->|OVERVIEW.md| DOCS[(.roundtable/docs)]
   MO -->|per phase, fresh context| PO[Phase Orchestrator]
   PO -->|TASK.md| A1[Task Agent A]
   PO -->|TASK.md| A2[Task Agent B]
@@ -30,7 +31,7 @@ graph TD
 
 ## Install
 
-Needs Python ≥ 3.11. Install as a global tool so `harness` works in any project:
+Needs Python ≥ 3.11. Install as a global tool so `roundtable` works in any project:
 
 ```bash
 uv tool install --editable .       # or: uv tool install .
@@ -39,21 +40,21 @@ uv tool install --editable .       # or: uv tool install .
 
 This installs only `pydantic` + `pyyaml` — the default `cli` backend shells out to
 LLM CLIs you already have, so no API SDKs are pulled in. For the optional API
-backend: `uv tool install --with 'llm-harness[litellm]' .`
+backend: `uv tool install --with 'roundtable-cli[litellm]' .`
 
 ## Quick start (in an existing project)
 
 ```bash
 cd my-existing-project
-harness init                       # writes config + lists installed CLIs & their models
-$EDITOR harness.config.yaml        # pick which CLI agent + model runs each role
+roundtable init                       # writes config + lists installed CLIs & their models
+$EDITOR roundtable.config.yaml        # pick which CLI agent + model runs each role
 
-harness plan --goal "Add retry with backoff to the HTTP client"
-#   -> .harness/plan/plan.json + PLAN.md   (status: needs approval)
+roundtable plan --goal "Add retry with backoff to the HTTP client"
+#   -> .roundtable/plan/plan.json + PLAN.md   (status: needs approval)
 
-harness approve                    # the human gate
-harness run                        # autonomous: agents work phase by phase
-harness status                     # progress
+roundtable approve                    # the human gate
+roundtable run                        # autonomous: agents work phase by phase
+roundtable status                     # progress
 ```
 
 `run` refuses until `approve`. Re-running resumes where it stopped.
@@ -61,25 +62,25 @@ harness status                     # progress
 ### Planning inputs
 
 ```bash
-harness plan --goal "..."          # from a one-line goal
-harness plan --prd docs/PRD.md     # from a PRD / requirements file
-harness plan --plan old-plan.json  # ingest an existing plan (JSON in our schema -> loaded as-is)
-harness plan --plan ROADMAP.md     # free-form plan/PRD -> structured into our schema by the planner
+roundtable plan --goal "..."          # from a one-line goal
+roundtable plan --prd docs/PRD.md     # from a PRD / requirements file
+roundtable plan --plan old-plan.json  # ingest an existing plan (JSON in our schema -> loaded as-is)
+roundtable plan --plan ROADMAP.md     # free-form plan/PRD -> structured into our schema by the planner
 ```
 
 ### Mapping an existing project
 
-Don't have a PRD? Point `harness map` at an unfamiliar (brownfield) codebase and it
-scans the project into two docs under `.harness/docs/`: an `ARCHITECTURE.md` outline
+Don't have a PRD? Point `roundtable map` at an unfamiliar (brownfield) codebase and it
+scans the project into two docs under `.roundtable/docs/`: an `ARCHITECTURE.md` outline
 (purpose, stack, module map, data flow, how to run) and a **reverse-engineered**
 `PRD.md`. You confirm the PRD by reviewing/editing it, then feed it straight into
 planning:
 
 ```bash
-harness map                                  # scan -> .harness/docs/ARCHITECTURE.md + PRD.md
-$EDITOR .harness/docs/PRD.md                 # the human confirmation: fix what's wrong
-harness plan --prd .harness/docs/PRD.md      # the confirmed PRD drives the plan
-harness approve && harness run
+roundtable map                                  # scan -> .roundtable/docs/ARCHITECTURE.md + PRD.md
+$EDITOR .roundtable/docs/PRD.md                 # the human confirmation: fix what's wrong
+roundtable plan --prd .roundtable/docs/PRD.md      # the confirmed PRD drives the plan
+roundtable approve && roundtable run
 ```
 
 `map` builds a compact, provider-agnostic digest of the codebase (pruned file tree +
@@ -90,27 +91,27 @@ is the `main` role), and `--max-files` / `--max-bytes` to size the digest.
 
 ## Watching a run live
 
-`harness run` is **live by default**: it prints a web dashboard link up front and
+`roundtable run` is **live by default**: it prints a web dashboard link up front and
 renders the terminal `watch` view inline as it works — no second terminal needed.
 
 ```bash
-harness run                  # runs + shows progress; dashboard link printed at the top
-harness run --approve        # auto-approve the plan before running
-harness run --no-watch       # run without the inline terminal view
-harness run --no-dashboard   # run without serving the web dashboard
-harness run --port 9000      # pin the run's dashboard port (default: a free port)
+roundtable run                  # runs + shows progress; dashboard link printed at the top
+roundtable run --approve        # auto-approve the plan before running
+roundtable run --no-watch       # run without the inline terminal view
+roundtable run --no-dashboard   # run without serving the web dashboard
+roundtable run --port 9000      # pin the run's dashboard port (default: a free port)
 ```
 
-A run streams structured events to `.harness/runs/run.log`, and `plan.json` is the
+A run streams structured events to `.roundtable/runs/run.log`, and `plan.json` is the
 live source of truth — so a viewer just polls the files and stays decoupled from
 the engine. You can also open the standalone surfaces (e.g. to watch from another
 machine), both zero-dependency (stdlib only):
 
 ```bash
-harness dashboard            # web UI at http://127.0.0.1:8787 (--open to launch a browser)
-harness dashboard --host 0.0.0.0 --port 9000   # expose on your LAN
-harness watch                # live dashboard right in the terminal
-harness stop                 # SIGTERM the in-progress run (via .harness/runs/run.pid)
+roundtable dashboard            # web UI at http://127.0.0.1:8787 (--open to launch a browser)
+roundtable dashboard --host 0.0.0.0 --port 9000   # expose on your LAN
+roundtable watch                # live dashboard right in the terminal
+roundtable stop                 # SIGTERM the in-progress run (via .roundtable/runs/run.pid)
 ```
 
 These show overall
@@ -121,15 +122,15 @@ timeline. The web dashboard is also **interactive**:
 approve the plan, start/stop a run, and approve waiting HITL tasks right from the
 page. No build step, no JS framework, no API keys.
 
-## REST control API (`harness serve`)
+## REST control API (`roundtable serve`)
 
-The dashboard server doubles as a local JSON control API. `harness serve` starts
+The dashboard server doubles as a local JSON control API. `roundtable serve` starts
 it headlessly and prints a
 machine-readable JSON line first (`{"event": "serving", "url": ...}`) so tools
 can parse the picked port (`--port 0` = a free one):
 
 ```bash
-harness serve --project . --port 0
+roundtable serve --project . --port 0
 ```
 
 | endpoint | what it does |
@@ -137,12 +138,12 @@ harness serve --project . --port 0
 | `GET /api/state` | live run state snapshot (same data as `watch`) |
 | `GET /api/project` | project root, plan/config presence, run pid, waiting tasks |
 | `GET /api/plan` · `PUT /api/plan` | read / save the plan (validated; editing resets approval) |
-| `POST /api/plan/generate` · `GET` | spawn a detached `harness plan` (goal/prd/plan_file) · poll it |
+| `POST /api/plan/generate` · `GET` | spawn a detached `roundtable plan` (goal/prd/plan_file) · poll it |
 | `POST /api/approve` | validate runners against the config, then approve |
 | `POST /api/run` · `POST /api/stop` | spawn a detached run (guarded by `run.pid`) · SIGTERM it |
 | `POST /api/resume` | approve a waiting HITL task `{"task": "p1-t2"}` |
-| `POST /api/init` | scaffold `.harness/` + default config |
-| `GET /api/config` · `PUT /api/config` | read / save `harness.config.yaml` (schema-validated) |
+| `POST /api/init` | scaffold `.roundtable/` + default config |
+| `GET /api/config` · `PUT /api/config` | read / save `roundtable.config.yaml` (schema-validated) |
 | `GET /api/agents` | probe installed CLIs + their models (`?timeout=s`) |
 | `GET /api/usage` | provider usage snapshots (calls, tokens, duration) |
 
@@ -210,11 +211,11 @@ any command for debug logging.
 
 ### Seeing what you can assign
 
-`harness init` (and `harness agents`) probes the configured CLIs and shows which
+`roundtable init` (and `roundtable agents`) probes the configured CLIs and shows which
 are installed and which models they offer, so you know what to put in `models:`:
 
 ```
-$ harness agents
+$ roundtable agents
   [x] antigravity  (agy) — 8 model(s):
           Gemini 3.5 Flash (High)
           ...
@@ -238,7 +239,7 @@ These commands often hit the network/auth and can be slow, so each runs with a
 bounded timeout (`--models-timeout` on init, `--timeout` on agents) and any
 failure degrades to a note — it never blocks. Tools without an enumeration
 command (claude, codex) just show `n/a`; pass the model to `--model` yourself.
-`harness init --no-models` skips probing; `harness agents --json` is
+`roundtable init --no-models` skips probing; `roundtable agents --json` is
 machine-readable.
 
 ### Letting agents edit files
@@ -261,7 +262,7 @@ agents:
 ### Per-task and per-phase controls in plan.json
 
 Two optional fields can be added to any task object in `plan.json` before running
-`harness approve`:
+`roundtable approve`:
 
 ```json
 {
@@ -279,7 +280,7 @@ Two optional fields can be added to any task object in `plan.json` before runnin
 - **`requires_approval`** — when `true`, the run pauses before executing this task
   and waits for a human to type:
   ```bash
-  harness resume --task p1-t2
+  roundtable resume --task p1-t2
   ```
   The engine prints the exact command. Other concurrent tasks in the same wave are
   unaffected (the semaphore slot is not held while waiting).
@@ -302,33 +303,33 @@ With `provider: litellm` there is no terminal command, so a role's `model` is th
 litellm model string (`openai/gpt-4o`, `anthropic/claude-3-5-sonnet-latest`,
 `ollama/llama3`, …) and `agent` is ignored — e.g. `main: { model: openai/gpt-4o }`
 (a bare string `openai/gpt-4o` works too). `litellm` requires the extra:
-`pip install 'llm-harness[litellm]'`.
+`pip install 'roundtable-cli[litellm]'`.
 
 ## Driving it from an MCP client
 
 Expose the whole workflow to an MCP client (Claude Code, Claude Desktop) so an
-agent can plan and run the harness as tool calls:
+agent can plan and run the roundtable as tool calls:
 
 ```bash
-harness mcp        # stdio MCP server  (needs the extra: pip install 'llm-harness[mcp]')
+roundtable mcp        # stdio MCP server  (needs the extra: pip install 'roundtable-cli[mcp]')
 ```
 
-Tools: `harness_init`, `harness_map`, `harness_plan`, `harness_approve`,
-`harness_run` (non-blocking; guarded against duplicate launches via a `run.pid`),
-`harness_stop`, `harness_status`, and `harness_usage` (token/cost tally); plus
-read-only `harness://plan`, `harness://state`, and `harness://logs` resources.
+Tools: `roundtable_init`, `roundtable_map`, `roundtable_plan`, `roundtable_approve`,
+`roundtable_run` (non-blocking; guarded against duplicate launches via a `run.pid`),
+`roundtable_stop`, `roundtable_status`, and `roundtable_usage` (token/cost tally); plus
+read-only `roundtable://plan`, `roundtable://state`, and `roundtable://logs` resources.
 Register it in Claude Code's `.claude/settings.json`:
 
 ```json
-{ "mcpServers": { "harness": { "command": "harness-mcp" } } }
+{ "mcpServers": { "roundtable": { "command": "roundtable-mcp" } } }
 ```
 
 ## Project layout produced by a run
 
 ```
 my-project/
-  harness.config.yaml              # provider + choosable {agent, model} per role
-  .harness/
+  roundtable.config.yaml              # provider + choosable {agent, model} per role
+  .roundtable/
     plan/{BRIEF.md, PLAN.md, plan.json}     # plan.json = source-of-truth manifest
     phases/
       phase-01-<slug>/
@@ -342,7 +343,7 @@ my-project/
     runs/run.log                   # append-only structured JSONL events (feeds the dashboard)
 ```
 
-Your own source files are never touched by the harness itself — only by the agents
+Your own source files are never touched by the roundtable itself — only by the agents
 you point at them.
 
 ## Design notes
@@ -377,21 +378,21 @@ you point at them.
 
 | module | responsibility |
 |---|---|
-| `harness/models.py`  | `AgentRef` + `Plan/Phase/Task` models + graph validation (intra- & cross-phase deps) |
-| `harness/errors.py`  | `HarnessError` (user-facing) + `TaskFailed` (per-task failure signal) |
-| `harness/config.py`  | `harness.config.yaml`: provider, role `{agent, model}` runners, `agents` map, `project_context` |
-| `harness/store.py`   | `.harness/` layout, manifest IO, structured event log, all writers |
-| `harness/llm.py`     | `LLMProvider` protocol; `CLIProvider` / `LiteLLMProvider` / `ScriptedProvider`; JSON extraction; `RunStats` |
-| `harness/discovery.py` | detect installed CLIs + list their models (`init` / `agents`) |
-| `harness/insights.py`  | `build_state` analytics over `plan.json` + events; terminal rendering |
-| `harness/dashboard.py` | zero-dep web dashboard + REST control API (stdlib `http.server`) |
-| `harness/runctl.py`   | `run.pid` protocol: detached run/plan launches, stop, HITL approve |
-| `harness/scan.py`    | stdlib codebase digest (pruned tree + key files) for `map` |
-| `harness/prompts.py` | per-role system prompts |
-| `harness/agents.py`  | `Planner`, `Analyst`, `MainOrchestrator`, `PhaseOrchestrator`, `TaskAgent` |
-| `harness/engine.py`  | dependency scheduler + run loop + context-clean boundary + failure/HITL handling |
-| `harness/cli.py`     | `init` / `agents` / `map` / `plan` / `approve` / `run` / `resume` / `stop` / `status` / `dashboard` / `serve` / `watch` / `mcp` |
-| `harness/mcp.py`     | MCP server (`harness mcp` / `harness-mcp`) exposing the workflow as tools + resources |
+| `roundtable/models.py`  | `AgentRef` + `Plan/Phase/Task` models + graph validation (intra- & cross-phase deps) |
+| `roundtable/errors.py`  | `RoundtableError` (user-facing) + `TaskFailed` (per-task failure signal) |
+| `roundtable/config.py`  | `roundtable.config.yaml`: provider, role `{agent, model}` runners, `agents` map, `project_context` |
+| `roundtable/store.py`   | `.roundtable/` layout, manifest IO, structured event log, all writers |
+| `roundtable/llm.py`     | `LLMProvider` protocol; `CLIProvider` / `LiteLLMProvider` / `ScriptedProvider`; JSON extraction; `RunStats` |
+| `roundtable/discovery.py` | detect installed CLIs + list their models (`init` / `agents`) |
+| `roundtable/insights.py`  | `build_state` analytics over `plan.json` + events; terminal rendering |
+| `roundtable/dashboard.py` | zero-dep web dashboard + REST control API (stdlib `http.server`) |
+| `roundtable/runctl.py`   | `run.pid` protocol: detached run/plan launches, stop, HITL approve |
+| `roundtable/scan.py`    | stdlib codebase digest (pruned tree + key files) for `map` |
+| `roundtable/prompts.py` | per-role system prompts |
+| `roundtable/agents.py`  | `Planner`, `Analyst`, `MainOrchestrator`, `PhaseOrchestrator`, `TaskAgent` |
+| `roundtable/engine.py`  | dependency scheduler + run loop + context-clean boundary + failure/HITL handling |
+| `roundtable/cli.py`     | `init` / `agents` / `map` / `plan` / `approve` / `run` / `resume` / `stop` / `status` / `dashboard` / `serve` / `watch` / `mcp` |
+| `roundtable/mcp.py`     | MCP server (`roundtable mcp` / `roundtable-mcp`) exposing the workflow as tools + resources |
 
 ## Tests
 
@@ -401,7 +402,7 @@ pytest -q
 ```
 
 Covers model validation (incl. cross-phase deps, forward-ref/duplicate-id
-rejection), the `.harness/` store, JSON extraction (objects, arrays, double-fenced
+rejection), the `.roundtable/` store, JSON extraction (objects, arrays, double-fenced
 blocks), the **CLIProvider against real subprocesses** (streaming output, cwd,
 missing-command and nonzero-exit handling), existing-plan ingestion + non-pollution
 layout, and full offline engine runs asserting the orchestration contract —

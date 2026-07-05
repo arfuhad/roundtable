@@ -3,9 +3,9 @@
 import datetime as _dt
 import json
 
-from harness.insights import build_state, fmt_dur, render_text
-from harness.models import Phase, Plan, Status, Task
-from harness.store import Store
+from roundtable.insights import build_state, fmt_dur, render_text
+from roundtable.models import Phase, Plan, Status, Task
+from roundtable.store import Store
 
 
 def _seed(tmp_path):

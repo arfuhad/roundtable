@@ -1,9 +1,9 @@
-"""Plan ingestion (existing JSON plan) + project-friendly .harness/ layout."""
+"""Plan ingestion (existing JSON plan) + project-friendly .roundtable/ layout."""
 
-from harness.cli import make_plan
-from harness.config import Config
-from harness.models import Phase, Plan, Task
-from harness.store import Store
+from roundtable.cli import make_plan
+from roundtable.config import Config
+from roundtable.models import Phase, Plan, Task
+from roundtable.store import Store
 
 
 async def test_import_existing_json_plan_no_llm(tmp_path):
@@ -28,7 +28,7 @@ async def test_import_existing_json_plan_no_llm(tmp_path):
     assert plan.main_runner == Config().models.main
 
 
-async def test_artifacts_stay_under_harness_workdir(tmp_path):
+async def test_artifacts_stay_under_roundtable_workdir(tmp_path):
     # Simulate an existing project with its own files.
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "app.py").write_text("print('hi')\n")
@@ -41,9 +41,9 @@ async def test_artifacts_stay_under_harness_workdir(tmp_path):
     store = Store(tmp_path)
     await make_plan(store, Config(), plan_path=str(f))
 
-    # Everything harness wrote is under .harness/, project files untouched.
-    assert (tmp_path / ".harness" / "plan" / "plan.json").exists()
+    # Everything roundtable wrote is under .roundtable/, project files untouched.
+    assert (tmp_path / ".roundtable" / "plan" / "plan.json").exists()
     assert (tmp_path / "src" / "app.py").read_text() == "print('hi')\n"
     top = {p.name for p in tmp_path.iterdir()}
     assert "phases" not in top and "plan" not in top  # not polluting the repo root
-    assert ".harness" in top
+    assert ".roundtable" in top

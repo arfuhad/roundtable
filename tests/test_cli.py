@@ -2,15 +2,15 @@
 
 import json
 
-from harness.cli import main
-from harness.config import write_default_config
-from harness.models import Status
-from harness.store import Store
+from roundtable.cli import main
+from roundtable.config import write_default_config
+from roundtable.models import Status
+from roundtable.store import Store
 
 
 def _use_scripted(root):
     write_default_config(root)
-    cfg = root / "harness.config.yaml"
+    cfg = root / "roundtable.config.yaml"
     cfg.write_text(cfg.read_text().replace("provider: cli", "provider: scripted"))
 
 

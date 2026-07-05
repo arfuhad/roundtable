@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "llm-harness"
+name = "roundtable-cli"
 version = "0.4.0"
-description = "A multi-LLM planning and orchestration harness: plan -> phases -> tasks, driven by choosable models."
+description = "Multi-LLM planning & orchestration that routes work across the terminal AI CLIs you already have: plan -> phases -> tasks, model choosable per role and per task."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -16,15 +16,16 @@ dependencies = [
 
 [project.optional-dependencies]
 litellm = ["litellm>=1.83"]   # only needed for `provider: litellm` (API access)
-mcp = ["mcp>=1.0"]            # only needed for `harness mcp` / `harness-mcp` server
+mcp = ["mcp>=1.0"]            # only needed for `roundtable mcp` / `roundtable-mcp` server
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "litellm>=1.83"]
 
 [project.scripts]
-harness = "harness.cli:main"
-harness-mcp = "harness.mcp:run_server"
+roundtable = "roundtable.cli:main"
+rt = "roundtable.cli:main"
+roundtable-mcp = "roundtable.mcp:run_server"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/harness"]
+packages = ["src/roundtable"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
