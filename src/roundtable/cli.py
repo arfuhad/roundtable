@@ -41,6 +41,7 @@ from .discovery import AgentStatus, discover
 from .engine import Engine
 from .errors import RoundtableError
 from .insights import build_state, render_text
+from . import modelpick
 from .llm import CLIProvider, LiteLLMProvider, LLMProvider, PiProvider, ScriptedProvider
 from .models import AgentRef, Plan, Status
 from .scan import build_digest
@@ -222,14 +223,29 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"\ninitialized roundtable in {root} (artifacts under {store.base})")
 
     config = load_config(root)
-    if config.provider == "cli" and not args.no_models:
-        print("\navailable agents & models (probing installed CLIs — Ctrl-C or --no-models to skip):")
-        statuses = asyncio.run(discover(config.agents, timeout=args.models_timeout))
-        _print_agents(statuses, limit=8)
-        print("\nassign an agent:model to each role in roundtable.config.yaml under `models:`.")
+    if not args.no_models and config.provider in ("pi", "cli"):
+        if sys.stdin.isatty():
+            try:
+                ans = input("\nselect a model for each role now? [Y/n] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                ans = "n"
+            if ans in ("", "y", "yes"):
+                groups = modelpick.list_model_groups(config, timeout=args.models_timeout)
+                current = modelpick.current_refs(config)
+                picks = modelpick.pick_models(groups, current)
+                if picks:
+                    modelpick.update_config_models(cfg_path, {**current, **picks})
+                    print("updated `models:` in the config.")
+                else:
+                    print("kept the scaffolded models — change any time with `roundtable models`.")
+        elif config.provider == "cli":
+            print("\navailable agents & models (probing installed CLIs — --no-models to skip):")
+            statuses = asyncio.run(discover(config.agents, timeout=args.models_timeout))
+            _print_agents(statuses, limit=8)
+            print("\nassign an agent:model to each role under `models:` (or run `roundtable models`).")
 
-    print("next: edit roundtable.config.yaml, then `roundtable plan --goal \"...\"` "
-          "(or --prd FILE / --plan FILE)")
+    print("next: edit roundtable.config.yaml (or `roundtable models`), then "
+          "`roundtable plan --goal \"...\"` (or --prd FILE / --plan FILE)")
     return 0
 
 
@@ -246,6 +262,56 @@ def cmd_agents(args: argparse.Namespace) -> int:
         print(json.dumps([asdict(s) for s in statuses], indent=2))
     else:
         _print_agents(statuses, limit=None)
+    return 0
+
+
+def _print_model_groups(groups: list[modelpick.ModelGroup]) -> None:
+    if not groups:
+        print("  (no model listing for this provider)")
+        return
+    for g in groups:
+        if not g.choices:
+            print(f"  {g.name}: {g.note or 'no models'}")
+            continue
+        print(f"  {g.name}  ({len(g.choices)} model(s)):")
+        for c in g.choices:
+            print(f"      {c.label}")
+
+
+def cmd_models(args: argparse.Namespace) -> int:
+    root = Path(args.project).resolve()
+    config = load_config(root)
+    if config.provider not in ("pi", "cli"):
+        print(f"provider is {config.provider!r}; `roundtable models` applies to 'pi' or 'cli'.")
+        return 0
+    groups = modelpick.list_model_groups(config, timeout=args.timeout)
+    if args.json:
+        import json
+        payload = [
+            {"provider": g.name, "installed": g.installed, "note": g.note,
+             "models": [{"label": c.label, "ref": c.ref.model_dump()} for c in g.choices]}
+            for g in groups
+        ]
+        print(json.dumps(payload, indent=2))
+        return 0
+    if args.list:
+        _print_model_groups(groups)
+        return 0
+    if not sys.stdin.isatty():
+        print("not a TTY — use `roundtable models --list` or `--json`, or run in an interactive terminal.")
+        return 1
+    current = modelpick.current_refs(config)
+    picks = modelpick.pick_models(groups, current)
+    if not picks:
+        print("no changes made.")
+        return 0
+    merged = {**current, **picks}
+    modelpick.update_config_models(root / "roundtable.config.yaml", merged)
+    print(f"\nupdated `models:` in {root / 'roundtable.config.yaml'}:")
+    for r in modelpick.ROLES:
+        print(f"  {r}: {modelpick.fmt_ref(merged.get(r))}")
+    if args.verify:
+        modelpick.verify_refs(config, picks)
     return 0
 
 
@@ -517,6 +583,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="seconds to wait per CLI when listing models (default 20)")
     sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp.set_defaults(func=cmd_agents)
+
+    sp = sub.add_parser("models", help="list connected models and pick one per role (pi/omp or cli)")
+    sp.add_argument("--project", default=".")
+    sp.add_argument("--list", action="store_true", help="just print available models, don't pick")
+    sp.add_argument("--json", action="store_true", help="machine-readable model list")
+    sp.add_argument("--verify", action="store_true",
+                    help="after picking, send one tiny call to each chosen model to confirm it works")
+    sp.add_argument("--timeout", type=float, default=20.0,
+                    help="seconds for the model-list query (default 20)")
+    sp.set_defaults(func=cmd_models)
 
     sp = sub.add_parser("map", help="scan an existing project into outline docs + a PRD to confirm")
     sp.add_argument("--project", default=".", help="roundtable root (where .roundtable/ lives)")

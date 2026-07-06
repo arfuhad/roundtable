@@ -271,6 +271,28 @@ Set the top-level `project_context` key (free text) to inject stack, conventions
 and working-directory notes into every task/phase prompt. Pass `-v`/`--verbose` to
 any command for debug logging.
 
+### Picking models per role (`roundtable models`)
+
+Instead of hand-editing `models:`, run **`roundtable models`** to choose a model for
+each role from the ones your backend is actually connected to — a two-step
+**provider → model** prompt in the terminal that writes your picks back into the
+config (leaving the rest of the file untouched). `roundtable init` offers the same
+picker interactively when run in a TTY.
+
+```bash
+roundtable models              # interactive: pick planner / main / phase / task
+roundtable models --list       # just print the connected models, grouped by provider
+roundtable models --json       # machine-readable
+roundtable models --verify     # after picking, send one tiny call to each model to confirm it works
+```
+
+It works for both backends: on `provider: pi` the list comes from the tool itself
+(`omp models --json`, or `pi --list-models`) and "provider" is the model's provider
+(`anthropic`, `opencode-go`, …); on `provider: cli` it comes from each agent's
+`models_command` and "provider" is the agent (`claude`, `opencode`, …). Because the
+list is the tool's *real* catalog, you can't fat-finger an unsupported id — and
+`--verify` catches models that are listed but error at call time.
+
 ### Seeing what you can assign
 
 `roundtable init` (and `roundtable agents`) probes the configured CLIs and shows which
@@ -448,6 +470,7 @@ you point at them.
 | `roundtable/store.py`   | `.roundtable/` layout, manifest IO, structured event log, all writers |
 | `roundtable/llm.py`     | `LLMProvider` protocol; `PiProvider` / `CLIProvider` / `LiteLLMProvider` / `ScriptedProvider`; JSON extraction; `RunStats` (tokens + cost) |
 | `roundtable/discovery.py` | detect installed CLIs + list their models (`init` / `agents`) |
+| `roundtable/modelpick.py` | list connected models + interactive per-role picker (`models` / `init`) |
 | `roundtable/insights.py`  | `build_state` analytics over `plan.json` + events; terminal rendering |
 | `roundtable/dashboard.py` | zero-dep web dashboard + REST control API (stdlib `http.server`) |
 | `roundtable/runctl.py`   | `run.pid` protocol: detached run/plan launches, stop, HITL approve |
@@ -455,7 +478,7 @@ you point at them.
 | `roundtable/prompts.py` | per-role system prompts |
 | `roundtable/agents.py`  | `Planner`, `Analyst`, `MainOrchestrator`, `PhaseOrchestrator`, `TaskAgent` |
 | `roundtable/engine.py`  | dependency scheduler + run loop + context-clean boundary + failure/HITL handling |
-| `roundtable/cli.py`     | `init` / `agents` / `map` / `plan` / `approve` / `run` / `resume` / `stop` / `status` / `dashboard` / `serve` / `watch` / `mcp` |
+| `roundtable/cli.py`     | `init` / `agents` / `models` / `map` / `plan` / `approve` / `run` / `resume` / `stop` / `status` / `dashboard` / `serve` / `watch` / `mcp` |
 | `roundtable/mcp.py`     | MCP server (`roundtable mcp` / `roundtable-mcp`) exposing the workflow as tools + resources |
 
 ## Tests
