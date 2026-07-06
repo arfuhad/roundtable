@@ -42,6 +42,12 @@ This installs only `pydantic` + `pyyaml` — the default `cli` backend shells ou
 LLM CLIs you already have, so no API SDKs are pulled in. For the optional API
 backend: `uv tool install --with 'roundtable-cli[litellm]' .`
 
+**Supported platforms:** macOS and Linux. On Windows, run it under WSL — the engine
+uses POSIX process control (`SIGTERM` via `run.pid`) and, for `pty: true` agents, a
+Unix pseudo-terminal, neither of which exists on native Windows. Whichever CLIs you
+point it at (Claude Code, Codex, Gemini CLI, …) must also be installed and on your
+`PATH`.
+
 ## Quick start (in an existing project)
 
 ```bash
@@ -58,6 +64,62 @@ roundtable status                     # progress
 ```
 
 `run` refuses until `approve`. Re-running resumes where it stopped.
+
+## Recommended backend: pi
+
+Roundtable works best with a **pi-family coding agent** — either upstream
+[**pi**](https://github.com/earendil-works/pi) or the batteries-included fork
+[**oh-my-pi (`omp`)**](https://github.com/can1357/oh-my-pi) (LSP/DAP/subagents). Both
+speak ~40 model providers and share the same CLI contract. With `provider: pi`, **the
+tool handles all LLM connectivity, auth and model routing** — roundtable just
+orchestrates. Task agents run with the tool's file tools (they edit the repo); every
+other role runs `--no-tools` as a pure completion. Because the tool reports usage, you
+get **exact token counts and real dollar cost** per run (not estimates).
+
+Pick the flavor with `pi.flavor` (`pi` or `omp`). They differ in only two details,
+which roundtable handles for you: `omp` has no `--no-context-files`, and its task
+agents get `--auto-approve` so they can edit autonomously.
+
+If `pi` (or `omp`) is on your `PATH`, `roundtable init` scaffolds this backend for you:
+
+```bash
+npm install -g @earendil-works/pi-coding-agent    # install pi   (or: @oh-my-pi/pi-coding-agent for omp)
+pi-ai login anthropic                             # connect an LLM (or export ANTHROPIC_API_KEY / OPENAI_API_KEY / …)
+cd my-existing-project
+roundtable init                                   # detects pi/omp -> writes the pi backend
+roundtable plan --goal "Add retry with backoff to the HTTP client"
+roundtable approve && roundtable run
+```
+
+The generated config routes a strong model to planning/orchestration and a cheap
+one to the task work (edit freely; `pi --list-models` shows what you can assign):
+
+```yaml
+provider: pi
+models:
+  planner: { model: anthropic/claude-opus-4-1 }    # strong
+  main:    { model: anthropic/claude-opus-4-1 }
+  phase:   { model: anthropic/claude-sonnet-4-5 }
+  task:    { model: anthropic/claude-haiku-4-5 }    # cheap/fast (or point at openrouter/opencode for free models)
+pi:
+  flavor: pi             # "pi" (upstream) or "omp" (oh-my-pi); omp uses the `omp` binary
+  command: ["pi"]        # base binary; ["npx", "pi"] works too
+  extra_args: []         # appended to every call, e.g. ["--thinking", "medium"]
+  orchestrator_context_files: false   # (pi flavor) true -> orchestrator roles may read AGENTS.md/CLAUDE.md
+```
+
+To use **oh-my-pi** instead, set `flavor: omp` (and `command: ["omp"]`) — roundtable
+adds `--auto-approve` to task agents and drops the pi-only `--no-context-files`.
+
+**Don't have pi or omp?** You have two options — roundtable prints both at `init`:
+
+1. **Install pi (or omp) and connect it to your LLMs** (recommended, above).
+2. **Use what you already have:** `provider: cli` drives the terminal CLIs you've
+   installed (claude, codex, gemini, …), or `provider: litellm` for direct API calls.
+   These backends are unchanged; see below.
+
+> Note: pi has no per-action permission gate and task agents share the project
+> directory, so keep `max_concurrency: 1` (the default) unless you isolate tasks.
 
 ### Planning inputs
 
@@ -295,6 +357,8 @@ Validation commands time out after `defaults.validate_timeout` (120s default).
 ## Other backends
 
 ```yaml
+provider: pi           # recommended: drive the pi coding agent (see "Recommended backend: pi")
+provider: cli          # reach other LLMs through their terminal CLIs (default without pi)
 provider: litellm      # direct API calls, needs API keys
 provider: scripted     # deterministic offline backend (demo/tests, no network)
 ```
@@ -382,7 +446,7 @@ you point at them.
 | `roundtable/errors.py`  | `RoundtableError` (user-facing) + `TaskFailed` (per-task failure signal) |
 | `roundtable/config.py`  | `roundtable.config.yaml`: provider, role `{agent, model}` runners, `agents` map, `project_context` |
 | `roundtable/store.py`   | `.roundtable/` layout, manifest IO, structured event log, all writers |
-| `roundtable/llm.py`     | `LLMProvider` protocol; `CLIProvider` / `LiteLLMProvider` / `ScriptedProvider`; JSON extraction; `RunStats` |
+| `roundtable/llm.py`     | `LLMProvider` protocol; `PiProvider` / `CLIProvider` / `LiteLLMProvider` / `ScriptedProvider`; JSON extraction; `RunStats` (tokens + cost) |
 | `roundtable/discovery.py` | detect installed CLIs + list their models (`init` / `agents`) |
 | `roundtable/insights.py`  | `build_state` analytics over `plan.json` + events; terminal rendering |
 | `roundtable/dashboard.py` | zero-dep web dashboard + REST control API (stdlib `http.server`) |

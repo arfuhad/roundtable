@@ -494,6 +494,7 @@ async function tick() {
         + (tm.slowest?` · slowest ${esc(tm.slowest.task_id)} ${dur(tm.slowest.duration_s)}`:"") + `</div>` : "")
     + (st.usage ? `<div class="meta" style="margin-top:10px">usage: <b>${st.usage.total_tokens.toLocaleString()}</b> tokens `
         + `(${st.usage.prompt_tokens.toLocaleString()} in / ${st.usage.completion_tokens.toLocaleString()} out) · ${st.usage.calls} calls`
+        + (st.usage.cost_usd ? ` · <b>$${st.usage.cost_usd.toFixed(4)}</b>` : "")
         + (st.usage.estimated ? ` <span class="idle">(est)</span>` : "") + `</div>` : "");
 
   // events

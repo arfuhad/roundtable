@@ -125,6 +125,7 @@ def build_state(store: Store, *, event_limit: int = 40) -> dict[str, Any]:
             "completion_tokens": usage_evt.get("completion_tokens", 0),
             "total_duration_s": usage_evt.get("total_duration_s", 0.0),
             "estimated": usage_evt.get("estimated", False),
+            "cost_usd": usage_evt.get("cost_usd", 0.0),
         }
     # Usage events feed the tile above; keep them out of the raw event stream.
     feed = [e for e in events if e.get("type") != "usage"]
@@ -199,10 +200,11 @@ def render_text(state: dict[str, Any], *, width: int = 64) -> str:
     u = state.get("usage")
     if u:
         note = " (est)" if u.get("estimated") else ""
+        cost = f" · ${u['cost_usd']:.4f}" if u.get("cost_usd") else ""
         lines.append(
             f"usage: {u['total_tokens']:,} tokens"
             f" ({u['prompt_tokens']:,} in / {u['completion_tokens']:,} out)"
-            f" · {u['calls']} calls{note}"
+            f" · {u['calls']} calls{cost}{note}"
         )
 
     return "\n".join(lines)

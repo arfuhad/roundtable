@@ -2,12 +2,17 @@
 
 Loaded from ``roundtable.config.yaml`` at the project root.
 
-Three backends (``provider``):
+Four backends (``provider``):
 
+* ``pi``      — drive the `pi` coding agent for every role. Task agents run with
+                pi's file tools (they edit the repo); every other role runs
+                ``pi --no-tools`` as a pure completion. Connectivity, auth and
+                model routing are handled by pi/pi-ai. The recommended backend
+                when `pi` is installed — it reports exact token usage and cost.
 * ``cli``     — run other LLMs through their terminal CLIs (claude, codex, gemini,
                 aider, llm, ollama, ...). Each role's "model" names an entry in
-                ``agents``. This is the primary mode: agents act on the real
-                project files via their own tools.
+                ``agents``. Agents act on the real project files via their own
+                tools. This is what roundtable falls back to without pi.
 * ``litellm`` — direct API calls; "model" is a litellm model string.
 * ``scripted``— deterministic offline backend (demo/tests).
 """
@@ -85,10 +90,40 @@ DEFAULT_AGENTS: dict[str, AgentSpec] = {
 }
 
 
+class PiOptions(BaseModel):
+    """Options for ``provider: pi`` — drive a pi-family coding agent for every role.
+
+    Two flavors are supported (both share the same CLI contract — ``--mode json``,
+    ``--no-tools``, ``--model``, stdin prompt, and identical usage/cost JSON):
+
+    * ``pi``  — upstream `pi` (`earendil-works/pi`), binary ``pi``.
+    * ``omp`` — `oh-my-pi` (`can1357/oh-my-pi`), binary ``omp``; a batteries-included
+      fork (LSP/DAP/subagents). It has no ``--no-context-files`` and gates edits
+      behind approval, so task agents get ``--auto-approve`` for autonomous runs.
+
+    Only the task role runs with file tools (so task agents edit the repo); every
+    other role (planner, phase, main, map) runs ``--no-tools`` as a pure completion.
+    Each role's ``model`` is passed to ``--model`` (a ``provider/id`` string, glob,
+    or fuzzy pattern — ``<tool> --list-models`` shows what's available). Auth is the
+    tool's: set a provider key in the environment (``ANTHROPIC_API_KEY`` /
+    ``OPENAI_API_KEY`` / ``GEMINI_API_KEY`` / ...) or use the tool's own login.
+    """
+
+    flavor: str = "pi"  # "pi" (upstream) | "omp" (oh-my-pi)
+    command: list[str] = Field(default_factory=list)  # override binary; [] -> flavor default (["pi"]/["omp"])
+    extra_args: list[str] = Field(default_factory=list)  # appended to every invocation
+    worker_extra_args: list[str] = Field(default_factory=list)  # extra flags for the task (worker) role
+    orchestrator_extra_args: list[str] = Field(default_factory=list)  # extra flags for non-worker roles
+    # (pi flavor only) orchestrator roles ignore the repo's AGENTS.md/CLAUDE.md by
+    # default (roundtable injects its own context); set true to let them load those.
+    orchestrator_context_files: bool = False
+
+
 class Config(BaseModel):
-    provider: str = "cli"  # "cli" | "litellm" | "scripted"
+    provider: str = "cli"  # "pi" | "cli" | "litellm" | "scripted"
     models: ModelRoles = Field(default_factory=ModelRoles)
     agents: dict[str, AgentSpec] = Field(default_factory=lambda: dict(DEFAULT_AGENTS))
+    pi: PiOptions = Field(default_factory=PiOptions)
     defaults: Defaults = Field(default_factory=Defaults)
     project_context: str = ""  # optional project context injected into agent prompts
 
@@ -150,6 +185,69 @@ defaults:
 """
 
 
+# Recommended backend when a pi-family CLI is installed: it drives every role and
+# handles LLM connectivity/auth itself. `roundtable init` writes this when it finds
+# `pi` or `omp` on PATH. Model defaults are a mixed strong+cheap start -- edit freely.
+def pi_config_yaml(flavor: str = "pi") -> str:
+    tool = "omp" if flavor == "omp" else "pi"
+    other = "pi" if flavor == "omp" else "omp"
+    models_hint = "`pi --list-models`" if tool == "pi" else "`omp --help` / omp's model config"
+    return f"""\
+# roundtable configuration ({tool} backend -- recommended).
+
+# Backend:
+#   pi       -> drive a pi-family coding agent ({tool}) for every role (this file).
+#               It handles LLM connectivity + auth; task agents edit files,
+#               orchestrator roles run `{tool} --no-tools`. Exact usage & cost reported.
+#               flavor `pi` = upstream `pi`; flavor `omp` = oh-my-pi (binary `omp`).
+#   cli      -> reach other LLMs through their terminal CLIs (claude, codex, ...)
+#   litellm  -> direct API calls (model = litellm string, needs API keys)
+#   scripted -> deterministic offline backend (demo/tests, no network)
+provider: pi
+
+# Per-role model (passed to `{tool} --model`: a `provider/id` string, glob, or fuzzy
+# pattern -- see {models_hint} for what you can use). `agent` is ignored
+# on this backend. Mixed strong+cheap defaults: strong models plan/orchestrate, a
+# cheap/fast model does the task work. Per-phase/per-task `runner` entries in the
+# generated plan override these.
+models:
+  planner: {{ model: anthropic/claude-opus-4-1 }}     # strong: breaks the goal into phases/tasks
+  main:    {{ model: anthropic/claude-opus-4-1 }}      # strong: keeps project docs coherent
+  phase:   {{ model: anthropic/claude-sonnet-4-5 }}    # mid: defines & summarizes each phase
+  task:    {{ model: anthropic/claude-haiku-4-5 }}     # cheap/fast: does the actual task work
+  # Cheaper/free task work? Point `task` (and `phase`) at another provider the tool
+  # supports, e.g. `openrouter/...` or `opencode/...` -- see {models_hint}.
+
+# Connect {tool} to your LLMs (pick one per provider you use):
+#   * env key: export ANTHROPIC_API_KEY=... (or OPENAI_API_KEY / GEMINI_API_KEY / ...)
+#   * or use {tool}'s own login (e.g. `pi-ai login anthropic` for pi)
+
+# Options for the pi backend (all optional).
+pi:
+  flavor: {flavor}          # "pi" (upstream) or "omp" (oh-my-pi); switch to use `{other}`
+  command: ["{tool}"]       # base binary; use ["npx", "{tool}"] if not installed globally
+  extra_args: []            # appended to every call, e.g. ["--thinking", "medium"]
+  worker_extra_args: []     # extra flags for the task role{_omp_worker_note(flavor)}
+  orchestrator_extra_args: []  # extra flags for planner/main/phase/map roles
+  orchestrator_context_files: false   # (pi flavor) true -> orchestrator roles read AGENTS.md/CLAUDE.md
+
+defaults:
+  temperature: 0.2
+  max_concurrency: 1   # raise to run independent tasks in a phase concurrently
+                       # ({tool} has no per-action permission gate and tasks share the
+                       #  repo dir, so keep at 1 unless you isolate tasks yourself)
+  max_retries: 1       # retries on a failing/timed-out {tool} call
+  timeout: 900         # seconds per {tool} call
+  validate_timeout: 120  # seconds per task/phase validate_command
+"""
+
+
+def _omp_worker_note(flavor: str) -> str:
+    if flavor == "omp":
+        return " (omp task agents already get --auto-approve)"
+    return ""
+
+
 def load_config(project_dir: Path) -> Config:
     path = Path(project_dir) / CONFIG_FILENAME
     if not path.exists():
@@ -158,7 +256,10 @@ def load_config(project_dir: Path) -> Config:
     return Config.model_validate(raw)
 
 
-def write_default_config(project_dir: Path) -> Path:
+def write_default_config(project_dir: Path, *, backend: str = "cli", flavor: str = "pi") -> Path:
+    """Write ``roundtable.config.yaml``. ``backend='pi'`` writes the recommended
+    pi-family template for ``flavor`` ('pi' or 'omp'); anything else writes the CLI
+    template."""
     path = Path(project_dir) / CONFIG_FILENAME
-    path.write_text(DEFAULT_CONFIG_YAML)
+    path.write_text(pi_config_yaml(flavor) if backend == "pi" else DEFAULT_CONFIG_YAML)
     return path

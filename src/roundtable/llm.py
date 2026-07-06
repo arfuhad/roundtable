@@ -1,8 +1,11 @@
 """LLM transport layer.
 
 A small ``LLMProvider`` protocol decouples the orchestration engine from how
-calls are made. Three backends ship:
+calls are made. Four backends ship:
 
+* ``PiProvider`` — drive the ``pi`` coding agent for every role (recommended).
+  pi handles LLM connectivity/auth; task agents run with pi's file tools,
+  orchestrator roles run ``pi --no-tools``. Reports exact token usage and cost.
 * ``CLIProvider`` — reach other LLMs through their terminal CLIs (claude, codex,
   gemini, aider, llm, ollama, ...). Each "model" names a configured agent
   command; the command runs in the project directory so the agent acts on real
@@ -28,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
-from .config import AgentSpec
+from .config import AgentSpec, PiOptions
 from .errors import RoundtableError
 
 
@@ -63,6 +66,7 @@ class RunStats:
     total_tokens: int = 0
     total_duration_s: float = 0.0
     estimated: bool = False
+    cost_usd: float = 0.0  # real dollar cost when the backend reports it (pi); 0 otherwise
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -72,6 +76,7 @@ class RunStats:
             "total_tokens": self.total_tokens,
             "total_duration_s": round(self.total_duration_s, 2),
             "estimated": self.estimated,
+            "cost_usd": round(self.cost_usd, 6),
         }
 
 
@@ -527,6 +532,321 @@ def _render_command(
             t = t.replace("{prompt}", "" if spec.stdin else payload)
         argv.append(t)
     return argv, (payload if spec.stdin else None)
+
+
+# --------------------------------------------------------------------------- #
+# Pi backend (recommended): drive the `pi` coding agent for every role
+# --------------------------------------------------------------------------- #
+# Only this role gets pi's file tools (it edits the repo). Every other role runs
+# `pi --no-tools` as a pure completion.
+PI_WORKER_ROLE = "task_exec"
+
+
+def _pi_flavor(options: PiOptions) -> tuple[list[str], list[str], list[str]]:
+    """Resolve (command, worker_flags, orchestrator_flags) for a pi flavor.
+
+    Both flavors share the core contract; only two things differ:
+    * ``pi``  — orchestrator roles skip the repo's context files (``--no-context-files``)
+      unless ``orchestrator_context_files`` is set.
+    * ``omp`` — has no ``--no-context-files``, and gates edits behind approval, so
+      task (worker) agents get ``--auto-approve`` to run autonomously.
+    User ``worker_extra_args`` / ``orchestrator_extra_args`` are appended on top.
+    """
+    flavor = (options.flavor or "pi").lower()
+    if flavor == "omp":
+        command = list(options.command) or ["omp"]
+        worker = ["--auto-approve"]
+        orch: list[str] = []
+    else:  # "pi"
+        command = list(options.command) or ["pi"]
+        worker = []
+        orch = [] if options.orchestrator_context_files else ["--no-context-files"]
+    worker += list(options.worker_extra_args)
+    orch += list(options.orchestrator_extra_args)
+    return command, worker, orch
+
+
+def _build_pi_argv(
+    options: PiOptions, *, model: str, system: str, is_worker: bool
+) -> list[str]:
+    """Build the pi/omp flag argv for a role (without the user prompt — that is
+    delivered per flavor by :func:`_pi_prompt_delivery`). The system prompt goes
+    via a flag.
+
+    Worker (``task_exec``) keeps file tools and *appends* roundtable's task
+    instructions to the tool's coding system prompt. Orchestrator roles disable
+    tools and *replace* the system prompt (they only reason/write).
+    """
+    command, worker_flags, orch_flags = _pi_flavor(options)
+    argv = list(command) + ["--mode", "json"]
+    if not is_worker:
+        argv += ["--no-tools"]
+    if model:
+        argv += ["--model", model]
+    if system:
+        argv += (["--append-system-prompt", system] if is_worker else ["--system-prompt", system])
+    argv += (worker_flags if is_worker else orch_flags)
+    argv += list(options.extra_args)
+    return argv
+
+
+def _pi_prompt_delivery(flavor: str, argv: list[str], payload: str) -> tuple[list[str], str | None]:
+    """Attach the user prompt to the invocation the way the flavor expects.
+
+    Upstream ``pi`` reads a piped prompt from stdin; ``omp`` ignores stdin and
+    takes the prompt as a positional argument (``--`` guards prompts that start
+    with ``-``/``@``). Returns ``(argv, stdin_data)`` where ``stdin_data`` is None
+    when the prompt is passed as an argument.
+    """
+    if (flavor or "pi").lower() == "omp":
+        return argv + ["-p", "--", payload], None
+    return argv, payload
+
+
+def _assistant_text_usage(msg: Any) -> tuple[str, dict[str, float], str | None] | None:
+    """Extract (text, usage, error) from a pi assistant message, or None if the
+    message is not an assistant turn. ``usage`` keys: input/output/total/cost."""
+    if not isinstance(msg, dict) or msg.get("role") != "assistant":
+        return None
+    text = "".join(
+        c.get("text", "")
+        for c in msg.get("content", [])
+        if isinstance(c, dict) and c.get("type") == "text"
+    )
+    usage = msg.get("usage") or {}
+    cost = usage.get("cost") or {}
+    u = {
+        "input": float(usage.get("input", 0) or 0),
+        "output": float(usage.get("output", 0) or 0),
+        "total": float(usage.get("totalTokens", 0) or 0),
+        "cost": float(cost.get("total", 0.0) or 0.0),
+    }
+    if not u["total"]:
+        u["total"] = u["input"] + u["output"]
+    stop = msg.get("stopReason")
+    err = msg.get("errorMessage") or f"pi stopped: {stop}" if stop in ("error", "aborted") else None
+    return text, u, err
+
+
+def parse_pi_events(stdout: str) -> tuple[str, dict[str, float]]:
+    """Parse a ``pi --mode json`` stdout stream into (final_text, usage).
+
+    Usage is summed across assistant ``message_end`` events (each message counted
+    once); the final text is the last assistant message that carried text. Raises
+    :class:`RoundtableError` if any assistant turn reported an error/abort. Falls
+    back to the terminal ``agent_end`` message list if no ``message_end`` events
+    were seen (older/edge pi builds).
+    """
+    totals = {"input": 0.0, "output": 0.0, "total": 0.0, "cost": 0.0}
+    final_text = ""
+    saw_message_end = False
+    error: str | None = None
+    agent_end_msgs: list[Any] | None = None
+
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        etype = ev.get("type")
+        if etype == "message_end":
+            parsed = _assistant_text_usage(ev.get("message"))
+            if parsed is None:
+                continue
+            saw_message_end = True
+            text, u, err = parsed
+            for k in totals:
+                totals[k] += u[k]
+            if text.strip():
+                final_text = text
+            if err and not error:
+                error = err
+        elif etype == "agent_end":
+            msgs = ev.get("messages")
+            if isinstance(msgs, list):
+                agent_end_msgs = msgs
+
+    if not saw_message_end and agent_end_msgs is not None:
+        for msg in agent_end_msgs:
+            parsed = _assistant_text_usage(msg)
+            if parsed is None:
+                continue
+            text, u, err = parsed
+            for k in totals:
+                totals[k] += u[k]
+            if text.strip():
+                final_text = text
+            if err and not error:
+                error = err
+
+    if error:
+        raise RoundtableError(f"pi agent error: {error}")
+    return final_text, totals
+
+
+class PiProvider:
+    """Drive the ``pi`` coding agent for every role (recommended backend).
+
+    pi handles LLM connectivity, auth and model routing. Task agents run with pi's
+    file tools so they edit the real project; all other roles run ``pi --no-tools``
+    as pure completions. pi is invoked with ``--mode json`` and the event stream is
+    parsed for the final answer plus **exact** token usage and dollar cost.
+    """
+
+    def __init__(
+        self,
+        options: PiOptions,
+        *,
+        cwd: str | Path | None = None,
+        timeout: int = 900,
+        max_retries: int = 1,
+    ):
+        self.options = options
+        self.cwd = str(cwd) if cwd else None
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.stats = RunStats()
+
+    async def complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        agent: str | None = None,  # ignored: pi is the agent
+        json_mode: bool = False,
+        temperature: float = 0.2,  # accepted for interface parity; pi controls its own sampling
+        role: str | None = None,
+        meta: dict[str, Any] | None = None,
+        on_output: Callable[[str], None] | None = None,
+    ) -> str:
+        is_worker = role == PI_WORKER_ROLE
+        argv = _build_pi_argv(self.options, model=model, system=system, is_worker=is_worker)
+        exe = shutil.which(argv[0])
+        if exe is None:
+            flavor = (self.options.flavor or "pi").lower()
+            install = (
+                "npm install -g @oh-my-pi/pi-coding-agent"
+                if flavor == "omp"
+                else "npm install -g @earendil-works/pi-coding-agent"
+            )
+            raise RoundtableError(
+                f"provider 'pi' (flavor {flavor!r}) needs the {argv[0]!r} CLI on PATH. "
+                f"Install it ({install}) and connect an LLM (set ANTHROPIC_API_KEY / "
+                "OPENAI_API_KEY / ... or use the tool's login), or switch `provider:` to "
+                "'cli'/'litellm' in roundtable.config.yaml."
+            )
+        argv[0] = exe
+
+        payload = user
+        if json_mode:
+            payload = user + "\n\nRespond with ONLY the JSON object, no prose or code fences."
+        run_argv, stdin_data = _pi_prompt_delivery(self.options.flavor, argv, payload)
+
+        t0 = time.monotonic()
+        raw = await _retry(
+            lambda: self._run(run_argv, stdin_data, role or "pi", on_output),
+            attempts=self.max_retries + 1,
+        )
+        text, usage = parse_pi_events(raw)
+        self.stats.calls += 1
+        self.stats.total_duration_s += time.monotonic() - t0
+        self.stats.prompt_tokens += int(usage["input"])
+        self.stats.completion_tokens += int(usage["output"])
+        self.stats.total_tokens += int(usage["total"])
+        self.stats.cost_usd += usage["cost"]
+        return text
+
+    async def _run(
+        self, argv: list[str], stdin_data: str | None, role: str,
+        on_output: Callable[[str], None] | None = None,
+    ) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=self.cwd,
+            stdin=asyncio.subprocess.PIPE if stdin_data is not None else asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        assert proc.stdout is not None and proc.stderr is not None
+        stderr_task = asyncio.create_task(proc.stderr.read())
+
+        if stdin_data is not None and proc.stdin is not None:
+            proc.stdin.write(stdin_data.encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+        # Read in chunks and split lines ourselves. pi/omp emit one JSON event per
+        # line, and a single event (an assistant message or tool result carrying a
+        # whole generated file) can be many MB — far past asyncio's default 64KB
+        # readline limit, which would raise "Separator is found, but chunk is longer
+        # than limit". Chunked reads have no such cap.
+        lines: list[str] = []
+        buf = b""
+
+        def _emit(line: str) -> None:
+            lines.append(line)
+            if on_output:
+                summary = _pi_event_summary(line)
+                if summary:
+                    on_output(summary)
+
+        try:
+            async with asyncio.timeout(self.timeout):
+                while True:
+                    chunk = await proc.stdout.read(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    nl = buf.rfind(b"\n")
+                    if nl != -1:
+                        complete, buf = buf[: nl + 1], buf[nl + 1 :]
+                        for raw in complete.splitlines(keepends=True):
+                            _emit(raw.decode("utf-8", "replace"))
+                if buf:  # trailing line without a newline
+                    _emit(buf.decode("utf-8", "replace"))
+                await proc.wait()
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise TimeoutError(f"pi ({role}) timed out after {self.timeout}s")
+
+        err = await stderr_task
+        out = "".join(lines)
+        if proc.returncode != 0:
+            err_text = err.decode("utf-8", "replace").strip()
+            detail = (err_text or out.strip() or "(no output on stdout/stderr)")[-800:]
+            raise RuntimeError(f"pi ({role}) exited {proc.returncode}: {detail}")
+        return out
+
+
+def _pi_event_summary(line: str) -> str | None:
+    """A short human line for the live dashboard from one pi json event (or None)."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        ev = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(ev, dict):
+        return None
+    etype = ev.get("type")
+    if etype == "message_end":
+        parsed = _assistant_text_usage(ev.get("message"))
+        if parsed and parsed[0].strip():
+            return parsed[0]
+    elif etype in ("tool_execution_start", "tool_call"):
+        name = ev.get("toolName") or ev.get("name")
+        if isinstance(name, str) and name:
+            return f"→ {name}"
+    return None
+
 
 # --------------------------------------------------------------------------- #
 # Offline / deterministic backend

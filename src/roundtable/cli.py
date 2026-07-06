@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import datetime as _dt
 import os
+import shutil
 import sys
 import threading
 import time
@@ -40,13 +41,18 @@ from .discovery import AgentStatus, discover
 from .engine import Engine
 from .errors import RoundtableError
 from .insights import build_state, render_text
-from .llm import CLIProvider, LiteLLMProvider, LLMProvider, ScriptedProvider
+from .llm import CLIProvider, LiteLLMProvider, LLMProvider, PiProvider, ScriptedProvider
 from .models import AgentRef, Plan, Status
 from .scan import build_digest
 from .store import Store
 
 
 def build_provider(config: Config, cwd: Path | str | None = None) -> LLMProvider:
+    if config.provider == "pi":
+        return PiProvider(
+            config.pi, cwd=cwd,
+            timeout=config.defaults.timeout, max_retries=config.defaults.max_retries,
+        )
     if config.provider == "cli":
         return CLIProvider(
             config.agents, cwd=cwd,
@@ -56,7 +62,9 @@ def build_provider(config: Config, cwd: Path | str | None = None) -> LLMProvider
         return ScriptedProvider()
     if config.provider == "litellm":
         return LiteLLMProvider(max_retries=config.defaults.max_retries)
-    raise RoundtableError(f"unknown provider {config.provider!r} (use 'cli', 'litellm', or 'scripted')")
+    raise RoundtableError(
+        f"unknown provider {config.provider!r} (use 'pi', 'cli', 'litellm', or 'scripted')"
+    )
 
 
 def _role_models(config: Config) -> dict[str, AgentRef]:
@@ -185,12 +193,33 @@ def cmd_init(args: argparse.Namespace) -> int:
     store = Store(root)
     store.scaffold()
     cfg_path = root / "roundtable.config.yaml"
+    # Roundtable works best with a pi-family agent. Prefer upstream `pi`; fall back
+    # to oh-my-pi (`omp`) if only that is installed.
+    pi_flavor = "pi" if shutil.which("pi") else ("omp" if shutil.which("omp") else None)
     if cfg_path.exists() and not args.force:
         print(f"config already exists: {cfg_path} (use --force to overwrite)")
     else:
-        write_default_config(root)
-        print(f"wrote {cfg_path}")
-    print(f"initialized roundtable in {root} (artifacts under {store.base})")
+        backend = "pi" if pi_flavor else "cli"
+        write_default_config(root, backend=backend, flavor=pi_flavor or "pi")
+        print(f"wrote {cfg_path}  (provider: {backend}" + (f", flavor: {pi_flavor})" if pi_flavor else ")"))
+        if pi_flavor:
+            tool = "omp" if pi_flavor == "omp" else "pi"
+            print(f"\ndetected `{tool}` on PATH → scaffolded the recommended pi backend (flavor: {pi_flavor}).")
+            print(f"connect an LLM to {tool} (pick one per provider you use):")
+            print("  • set a key:  export ANTHROPIC_API_KEY=…  (or OPENAI_API_KEY / GEMINI_API_KEY / …)")
+            print(f"  • or use {tool}'s own login (e.g. `pi-ai login <provider>` for pi)")
+            hint = "`pi --list-models`" if tool == "pi" else "`omp --help`"
+            print(f"see assignable models ({hint}), then edit `models:` in the config.")
+        else:
+            print("\nno pi-family agent (`pi` or `omp`) on PATH. Two ways to run roundtable:")
+            print("  1) Recommended — install pi (or oh-my-pi) and connect it to your LLMs, then re-run `roundtable init`:")
+            print("       npm install -g @earendil-works/pi-coding-agent    # upstream pi")
+            print("       npm install -g @oh-my-pi/pi-coding-agent           # oh-my-pi (omp): LSP/DAP/subagents")
+            print("       # then: set ANTHROPIC_API_KEY / OPENAI_API_KEY / … (or the tool's login)")
+            print("  2) Use what you already have — the scaffolded `provider: cli` config drives the")
+            print("     terminal CLIs you've installed (claude, codex, gemini, …); or set `provider: litellm`")
+            print("     for direct API calls. Edit roundtable.config.yaml to pick each role's agent/model.")
+    print(f"\ninitialized roundtable in {root} (artifacts under {store.base})")
 
     config = load_config(root)
     if config.provider == "cli" and not args.no_models:
