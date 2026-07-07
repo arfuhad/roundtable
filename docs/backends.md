@@ -89,6 +89,19 @@ pi:
 Use `provider: cli` when you want Roundtable to drive the tools already installed
 on your machine, such as Claude Code, Codex, Gemini CLI, aider, `llm`, or Ollama.
 
+### First run
+
+Install at least one AI CLI (Claude Code, Codex, Gemini CLI, aider, …) and
+authenticate it per its own docs. Then:
+
+```bash
+cd my-existing-project
+roundtable init        # detects installed CLIs and writes a `provider: cli` config
+roundtable agents      # shows which CLIs are on PATH + the models they expose
+roundtable models      # pick a model per role interactively (or edit the config)
+roundtable plan --goal "Add retry with backoff" && roundtable approve && roundtable run
+```
+
 Each role is a `{agent, model}` pair:
 
 ```yaml
@@ -132,10 +145,11 @@ models:
   task:    { model: ollama/llama3 }
 ```
 
-Install the extra first:
+Install the extra and set your provider API keys:
 
 ```bash
-uv tool install --with 'roundtable-cli[litellm]' .
+uv tool install "roundtable-cli[litellm] @ git+https://github.com/arfuhad/roundtable.git"
+export OPENAI_API_KEY=…   # and/or ANTHROPIC_API_KEY, etc. — whatever your models need
 ```
 
 ## Scripted backend

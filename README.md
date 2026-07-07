@@ -64,16 +64,35 @@ graph TD
   Codex, Gemini CLI, aider, `llm`, Ollama, pi, or omp.
 - **uv or pipx** for global installation.
 
-Install as a global tool so `roundtable` works in any project:
+Install it as a global tool so `roundtable` works in any project.
+
+**From GitHub (recommended):**
 
 ```bash
-uv tool install --editable .       # or: uv tool install .
-# (alternative) pipx install --editable .
+uv tool install git+https://github.com/arfuhad/roundtable.git
+# or with pipx:
+pipx install git+https://github.com/arfuhad/roundtable.git
 ```
 
-This installs only `pydantic` + `pyyaml` — the default `cli` backend shells out to
-LLM CLIs you already have, so no API SDKs are pulled in. For the optional API
-backend: `uv tool install --with 'roundtable-cli[litellm]' .`
+**From source** (to hack on Roundtable itself):
+
+```bash
+git clone https://github.com/arfuhad/roundtable.git && cd roundtable
+uv tool install --editable .        # or: pipx install --editable .
+```
+
+The base install pulls only `pydantic` + `pyyaml` — the default `cli` backend shells
+out to LLM CLIs you already have, so no API SDKs are added. Optional extras append
+the same `@ git+…` reference to the package name:
+
+```bash
+# direct API calls via LiteLLM:
+uv tool install "roundtable-cli[litellm] @ git+https://github.com/arfuhad/roundtable.git"
+# expose Roundtable to MCP clients:
+uv tool install "roundtable-cli[mcp] @ git+https://github.com/arfuhad/roundtable.git"
+```
+
+Not published to PyPI yet, so install from the repo as above.
 
 ## Quick start (in an existing project)
 
@@ -402,8 +421,9 @@ provider: scripted     # deterministic offline backend (demo/tests, no network)
 With `provider: litellm` there is no terminal command, so a role's `model` is the
 litellm model string (`openai/gpt-4o`, `anthropic/claude-3-5-sonnet-latest`,
 `ollama/llama3`, …) and `agent` is ignored — e.g. `main: { model: openai/gpt-4o }`
-(a bare string `openai/gpt-4o` works too). `litellm` requires the extra:
-`pip install 'roundtable-cli[litellm]'`.
+(a bare string `openai/gpt-4o` works too). `litellm` needs the `litellm` extra —
+see [Install](#install) — and the usual provider API keys in your environment
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …).
 
 ## Driving it from an MCP client
 
@@ -411,7 +431,7 @@ Expose the whole workflow to an MCP client (Claude Code, Claude Desktop) so an
 agent can plan and run the roundtable as tool calls:
 
 ```bash
-roundtable mcp        # stdio MCP server  (needs the extra: pip install 'roundtable-cli[mcp]')
+roundtable mcp        # stdio MCP server  (needs the mcp extra — see Install)
 ```
 
 Tools: `roundtable_init`, `roundtable_map`, `roundtable_plan`, `roundtable_approve`,
