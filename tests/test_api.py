@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 
 from roundtable.dashboard import make_server
+from roundtable.errors import RoundtableError
 from roundtable.models import Phase, Plan, Task
 from roundtable.store import Store
 
@@ -124,6 +125,37 @@ def test_stop_without_run(tmp_path):
         code, res = _req(url + "/api/stop", "POST", {})
         assert code == 200 and res["ok"] is False and "no run.pid" in res["message"]
     finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_dashboard_rejects_non_loopback_bind(tmp_path):
+    store = Store(tmp_path)
+    try:
+        make_server(store, host="0.0.0.0", port=0)
+        assert False, "expected non-loopback bind to be rejected"
+    except RoundtableError as e:
+        assert "localhost" in str(e)
+
+
+def test_mutating_api_rejects_while_run_live(tmp_path):
+    store = Store(tmp_path)
+    store.write_run_pid(1)  # pid 1 is alive and not ours -> run considered live
+    httpd, url = _serve(store)
+    try:
+        plan = _plan()
+        plan_body = {"plan": json.loads(plan.model_dump_json())}
+        for path, method, body in [
+            ("/api/plan", "PUT", plan_body),
+            ("/api/config", "PUT", {"text": "provider: scripted\n"}),
+            ("/api/init", "POST", {}),
+            ("/api/plan/generate", "POST", {"goal": "g"}),
+        ]:
+            code, res = _req(url + path, method, body)
+            assert code == 400, path
+            assert "run is in progress" in res["error"]
+    finally:
+        store.clear_run_pid()
         httpd.shutdown()
         httpd.server_close()
 

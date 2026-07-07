@@ -10,10 +10,10 @@ import pytest
 
 from roundtable import runctl
 from roundtable.config import Config
-from roundtable.engine import Engine, validate_runners
+from roundtable.engine import Engine, normalize_runner_refs, validate_runners
 from roundtable.errors import RoundtableError
 from roundtable.llm import CLIProvider, ScriptedProvider
-from roundtable.models import Phase, Plan, Status, Task
+from roundtable.models import AgentRef, Phase, Plan, Status, Task
 from roundtable.store import Store
 
 
@@ -51,6 +51,41 @@ def test_validate_runners_skipped_for_non_cli_provider():
     validate_runners(_plan("anything-goes"), config)  # no raise
 
 
+def test_normalize_runner_refs_for_direct_providers():
+    plan = Plan(
+        goal="g",
+        main_runner=AgentRef(agent="google-antigravity", model="gemini-3.5-flash"),
+        runners={"phase": AgentRef(agent="opencode-go", model="glm-5.2")},
+        phases=[
+            Phase(
+                id="p1",
+                index=1,
+                title="P",
+                runner=AgentRef(agent="opencode-go", model="glm-5.2"),
+                tasks=[
+                    Task(
+                        id="p1-t1",
+                        title="T",
+                        runner=AgentRef(agent="opencode-go", model="mimo-v2.5-pro"),
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert normalize_runner_refs(plan, Config(provider="pi"))
+    assert plan.main_runner == AgentRef(model="google-antigravity/gemini-3.5-flash")
+    assert plan.runners["phase"] == AgentRef(model="opencode-go/glm-5.2")
+    assert plan.phases[0].runner == AgentRef(model="opencode-go/glm-5.2")
+    assert plan.phases[0].tasks[0].runner == AgentRef(model="opencode-go/mimo-v2.5-pro")
+
+
+def test_normalize_runner_refs_leaves_cli_refs_unchanged():
+    plan = _plan(AgentRef(agent="opencode-go", model="glm-5.2"))
+    assert not normalize_runner_refs(plan, Config(provider="cli"))
+    assert plan.main_runner == AgentRef(agent="opencode-go", model="glm-5.2")
+
+
 async def test_engine_validates_before_running_with_cli_provider(tmp_path):
     store = Store(tmp_path)
     store.save_plan(_plan("nope"))
@@ -62,6 +97,54 @@ async def test_engine_validates_before_running_with_cli_provider(tmp_path):
     # nothing started: no events, plan untouched
     assert store.load_plan().status == Status.pending
     assert not any(e["type"] == "run_started" for e in store.read_events())
+
+
+async def test_engine_normalizes_pi_style_saved_plan_before_running(tmp_path):
+    class RecordingProvider(ScriptedProvider):
+        async def complete(self, **kw):
+            self.calls.append(kw)
+            role = kw.get("role") or ""
+            if role == "phase_define":
+                return "definition"
+            if role == "task_exec":
+                return "result"
+            if role == "phase_summary":
+                return "summary"
+            return "doc"
+
+    store = Store(tmp_path)
+    plan = Plan(
+        goal="g",
+        main_runner=AgentRef(agent="google-antigravity", model="gemini-3.5-flash"),
+        phases=[
+            Phase(
+                id="p1",
+                index=1,
+                title="P",
+                runner=AgentRef(agent="opencode-go", model="glm-5.2"),
+                tasks=[
+                    Task(
+                        id="p1-t1",
+                        title="T",
+                        runner=AgentRef(agent="opencode-go", model="mimo-v2.5-pro"),
+                    )
+                ],
+            )
+        ],
+    )
+    plan.approved = True
+    store.save_plan(plan)
+
+    provider = RecordingProvider()
+    result = await Engine(store, Config(provider="pi"), provider).run()
+
+    assert result.status == Status.done
+    phase_define = next(c for c in provider.calls if c["role"] == "phase_define")
+    task_exec = next(c for c in provider.calls if c["role"] == "task_exec")
+    assert phase_define["model"] == "opencode-go/glm-5.2"
+    assert phase_define["agent"] == ""
+    assert task_exec["model"] == "opencode-go/mimo-v2.5-pro"
+    assert store.load_plan().phases[0].runner == AgentRef(model="opencode-go/glm-5.2")
 
 
 # --------------------------------------------------------------------------- #
@@ -133,6 +216,25 @@ async def test_roundtable_error_in_task_fails_task_without_retry(tmp_path):
     assert calls["n"] == 1  # no retries for config errors
     assert plan.status == Status.failed
     assert plan.phases[0].tasks[0].status == Status.failed
+
+
+async def test_phase_define_error_fails_task_not_whole_engine_crash(tmp_path):
+    class DefineErrorProvider(ScriptedProvider):
+        async def complete(self, **kw):
+            if kw.get("role") == "phase_define":
+                raise RoundtableError("pi could not authenticate provider 'fireworks'")
+            return await super().complete(**kw)
+
+    store = Store(tmp_path)
+    store.save_plan(_plan("m/task"))
+    engine = Engine(store, Config(provider="scripted"), DefineErrorProvider())
+    plan = await engine.run()
+
+    assert plan.status == Status.failed
+    assert plan.phases[0].status == Status.failed
+    assert plan.phases[0].tasks[0].status == Status.failed
+    assert not any(e["type"] == "run_error" for e in store.read_events())
+    assert "fireworks" in (store.task_dir(plan.phases[0], plan.phases[0].tasks[0]) / "result.md").read_text()
 
 
 # --------------------------------------------------------------------------- #
@@ -227,6 +329,31 @@ def test_start_run_refuses_when_live(tmp_path):
     store.write_run_pid(1)
     pid, msg = runctl.start_run(store)
     assert pid is None and "already in progress" in msg
+
+
+def test_stop_run_signals_process_group_and_keeps_pid(tmp_path, monkeypatch):
+    store = Store(tmp_path)
+    store.write_run_pid(12345)
+    calls = []
+
+    def fake_kill(pid, sig):
+        calls.append(("kill", pid, sig))
+
+    def fake_killpg(pgid, sig):
+        calls.append(("killpg", pgid, sig))
+
+    monkeypatch.setattr(runctl.os, "kill", fake_kill)
+    monkeypatch.setattr(runctl.os, "getpgid", lambda pid: 54321)
+    monkeypatch.setattr(runctl.os, "getpgrp", lambda: 99999)
+    monkeypatch.setattr(runctl.os, "killpg", fake_killpg)
+
+    stopped, msg = runctl.stop_run(store)
+
+    assert stopped
+    assert "process group 54321" in msg
+    assert ("kill", 12345, 0) in calls
+    assert ("killpg", 54321, runctl.signal.SIGTERM) in calls
+    assert store.read_run_pid() == 12345
 
 
 def test_approve_hitl_transitions(tmp_path):

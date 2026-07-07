@@ -163,7 +163,7 @@ def _build_server() -> Any:
         """Stop a running roundtable execution.
 
         Reads the PID from the run.pid file and sends SIGTERM to gracefully
-        stop the process.
+        stop the process group when possible.
 
         Args:
             project: Roundtable project root (default: '.').

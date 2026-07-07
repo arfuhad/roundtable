@@ -5,7 +5,7 @@ One place owns the ``run.pid`` protocol:
 * a live run writes its pid to ``.roundtable/runs/run.pid`` and clears it on exit;
 * starting a run (attached or detached) first checks for a live pid and refuses
   to double-launch;
-* ``stop_run`` SIGTERMs the recorded pid.
+* ``stop_run`` SIGTERMs the recorded pid's process group when possible.
 
 Detached launches (MCP / REST) spawn ``python -m roundtable.cli run`` in a new
 session so the run outlives the server that started it; its output is appended
@@ -87,7 +87,7 @@ def start_run(store: Store, *, approve: bool = False) -> tuple[int | None, str]:
 
 
 def stop_run(store: Store) -> tuple[bool, str]:
-    """SIGTERM the recorded run pid; returns ``(stopped, message)``."""
+    """SIGTERM the recorded run pid/process group; returns ``(stopped, message)``."""
     pid = store.read_run_pid()
     if pid is None:
         return False, "no run.pid found — no run appears to be in progress"
@@ -98,12 +98,20 @@ def stop_run(store: Store) -> tuple[bool, str]:
         return False, f"process {pid} is not running (stale pid file cleaned up)"
     except PermissionError:
         return False, f"cannot signal process {pid} (permission denied)"
+    target = f"process {pid}"
     try:
-        os.kill(pid, signal.SIGTERM)
+        pgid = os.getpgid(pid)
+        if pgid != os.getpgrp():
+            os.killpg(pgid, signal.SIGTERM)
+            target = f"process group {pgid}"
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        store.clear_run_pid()
+        return False, f"process {pid} is not running (stale pid file cleaned up)"
     except OSError as e:
         return False, f"could not stop process {pid}: {e}"
-    store.clear_run_pid()
-    return True, f"sent SIGTERM to process {pid}"
+    return True, f"sent SIGTERM to {target}"
 
 
 def approve_hitl(store: Store, task_id: str) -> str:

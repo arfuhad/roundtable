@@ -178,6 +178,35 @@ def test_update_config_models_preserves_rest(tmp_path):
         assert keep in txt
 
 
+def test_update_config_models_preserves_in_block_comments(tmp_path):
+    # The pi template ends its models block with indented comment lines; picking a
+    # model must not delete them (regression: the scan used to consume all indented
+    # lines, dropping the trailing helper comments).
+    p = tmp_path / "roundtable.config.yaml"
+    p.write_text(
+        "provider: pi\n\n"
+        "models:\n"
+        "  planner: { model: old1 }     # strong\n"
+        "  main:    { model: old2 }\n"
+        "  phase:   { model: old3 }\n"
+        "  task:    { model: old4 }\n"
+        "  # Cheaper/free task work? Point task at another provider.\n"
+        "  # e.g. openrouter/... or opencode/...\n\n"
+        "pi:\n  flavor: pi\n"
+    )
+    refs = {"planner": AgentRef(model="new1"), "main": AgentRef(model="old2"),
+            "phase": AgentRef(model="old3"), "task": AgentRef(model="new4")}
+    update_config_models(p, refs)
+
+    from roundtable.config import load_config
+    c = load_config(tmp_path)
+    assert c.models.planner.model == "new1" and c.models.task.model == "new4"
+    txt = p.read_text()
+    assert "# Cheaper/free task work?" in txt
+    assert "e.g. openrouter/... or opencode/..." in txt
+    assert "flavor: pi" in txt
+
+
 def test_update_config_models_appends_when_missing(tmp_path):
     p = tmp_path / "roundtable.config.yaml"
     p.write_text("provider: pi\npi:\n  flavor: omp\n")

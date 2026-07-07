@@ -272,7 +272,12 @@ def update_config_models(path: Path, refs: dict[str, AgentRef], roles: list[str]
         new = lines + ([""] if lines and lines[-1].strip() else []) + block
     else:
         end = start + 1
-        while end < len(lines) and (lines[end].startswith((" ", "\t"))):
+        # Consume the block's role lines, but stop at an indented comment line so
+        # trailing comments inside the block are preserved (blank/dedented lines
+        # already end the block).
+        while end < len(lines) and lines[end].startswith((" ", "\t")):
+            if lines[end].lstrip().startswith("#"):
+                break
             end += 1
         new = lines[:start] + block + lines[end:]
     path.write_text("\n".join(new) + ("\n" if text.endswith("\n") else ""))

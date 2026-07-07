@@ -1,5 +1,8 @@
 # Roundtable
 
+> Build reliable, resumable AI coding workflows without blowing your context window
+> or getting pinned to one vendor's usage limits.
+
 **Roundtable** is a small, from-scratch **multi-LLM planning and orchestration tool**
 that drives **other LLMs through their terminal CLIs** (Claude Code, Codex, Gemini CLI,
 aider, `llm`, Ollama, …) — routing each part of the work to the model you choose, so no
@@ -29,9 +32,35 @@ graph TD
   PO -. context discarded .-> X(( ))
 ```
 
+## Key features
+
+- **Multi-LLM orchestration:** route planner, main, phase, and task roles to different
+  models/providers.
+- **Human approval gate:** inspect the generated plan before any agent changes files.
+- **Context isolation:** phase/task contexts are discarded after each phase; Main only
+  receives structured summaries.
+- **Resumable runs:** completed work is reused, and failed/skipped parts can be retried.
+- **Validation gates:** per-task and per-phase commands decide whether work actually
+  passed.
+- **Live local dashboard:** watch progress, approve tasks, stop runs, and inspect usage
+  without a cloud service.
+- **Full MCP Server Support:** expose init, map, plan, approve, run, stop, status, and
+  usage to Claude Desktop, Claude Code, and other MCP clients.
+
 ## Install
 
-Needs Python ≥ 3.11. Install as a global tool so `roundtable` works in any project:
+### Prerequisites
+
+- **Python 3.11+**
+- **macOS or Linux**
+- **Windows via WSL only:** native Windows is not supported because Roundtable uses
+  POSIX process control (`SIGTERM`, process groups) and Unix pseudo-terminals for
+  `pty: true` agents.
+- **At least one supported AI CLI on `PATH`** for real runs, such as Claude Code,
+  Codex, Gemini CLI, aider, `llm`, Ollama, pi, or omp.
+- **uv or pipx** for global installation.
+
+Install as a global tool so `roundtable` works in any project:
 
 ```bash
 uv tool install --editable .       # or: uv tool install .
@@ -41,12 +70,6 @@ uv tool install --editable .       # or: uv tool install .
 This installs only `pydantic` + `pyyaml` — the default `cli` backend shells out to
 LLM CLIs you already have, so no API SDKs are pulled in. For the optional API
 backend: `uv tool install --with 'roundtable-cli[litellm]' .`
-
-**Supported platforms:** macOS and Linux. On Windows, run it under WSL — the engine
-uses POSIX process control (`SIGTERM` via `run.pid`) and, for `pty: true` agents, a
-Unix pseudo-terminal, neither of which exists on native Windows. Whichever CLIs you
-point it at (Claude Code, Codex, Gemini CLI, …) must also be installed and on your
-`PATH`.
 
 ## Quick start (in an existing project)
 
@@ -65,6 +88,15 @@ roundtable status                     # progress
 
 `run` refuses until `approve`. Re-running resumes where it stopped.
 
+## Proof of life
+
+Roundtable includes both a web dashboard and a terminal watch view, so a run is not a
+black box.
+
+| Web dashboard | Terminal watch |
+|---|---|
+| ![Roundtable web dashboard showing phase/task progress, active agents, and event timeline](docs/assets/roundtable-dashboard.svg) | ![Roundtable terminal watch view showing progress, active tasks, usage, and recent events](docs/assets/roundtable-watch.svg) |
+
 ## Recommended backend: pi
 
 Roundtable works best with a **pi-family coding agent** — either upstream
@@ -72,13 +104,7 @@ Roundtable works best with a **pi-family coding agent** — either upstream
 [**oh-my-pi (`omp`)**](https://github.com/can1357/oh-my-pi) (LSP/DAP/subagents). Both
 speak ~40 model providers and share the same CLI contract. With `provider: pi`, **the
 tool handles all LLM connectivity, auth and model routing** — roundtable just
-orchestrates. Task agents run with the tool's file tools (they edit the repo); every
-other role runs `--no-tools` as a pure completion. Because the tool reports usage, you
-get **exact token counts and real dollar cost** per run (not estimates).
-
-Pick the flavor with `pi.flavor` (`pi` or `omp`). They differ in only two details,
-which roundtable handles for you: `omp` has no `--no-context-files`, and its task
-agents get `--auto-approve` so they can edit autonomously.
+orchestrates.
 
 If `pi` (or `omp`) is on your `PATH`, `roundtable init` scaffolds this backend for you:
 
@@ -91,29 +117,12 @@ roundtable plan --goal "Add retry with backoff to the HTTP client"
 roundtable approve && roundtable run
 ```
 
-The generated config routes a strong model to planning/orchestration and a cheap
-one to the task work (edit freely; `pi --list-models` shows what you can assign):
-
-```yaml
-provider: pi
-models:
-  planner: { model: anthropic/claude-opus-4-1 }    # strong
-  main:    { model: anthropic/claude-opus-4-1 }
-  phase:   { model: anthropic/claude-sonnet-4-5 }
-  task:    { model: anthropic/claude-haiku-4-5 }    # cheap/fast (or point at openrouter/opencode for free models)
-pi:
-  flavor: pi             # "pi" (upstream) or "omp" (oh-my-pi); omp uses the `omp` binary
-  command: ["pi"]        # base binary; ["npx", "pi"] works too
-  extra_args: []         # appended to every call, e.g. ["--thinking", "medium"]
-  orchestrator_context_files: false   # (pi flavor) true -> orchestrator roles may read AGENTS.md/CLAUDE.md
-```
-
-To use **oh-my-pi** instead, set `flavor: omp` (and `command: ["omp"]`) — roundtable
-adds `--auto-approve` to task agents and drops the pi-only `--no-context-files`.
+See [Backend configuration](docs/backends.md) for the full pi/omp config, flavor
+differences, and direct CLI/LiteLLM alternatives.
 
 **Don't have pi or omp?** You have two options — roundtable prints both at `init`:
 
-1. **Install pi (or omp) and connect it to your LLMs** (recommended, above).
+1. **Install pi (or omp) and connect it to your LLMs** (recommended).
 2. **Use what you already have:** `provider: cli` drives the terminal CLIs you've
    installed (claude, codex, gemini, …), or `provider: litellm` for direct API calls.
    These backends are unchanged; see below.
@@ -166,14 +175,14 @@ roundtable run --port 9000      # pin the run's dashboard port (default: a free 
 
 A run streams structured events to `.roundtable/runs/run.log`, and `plan.json` is the
 live source of truth — so a viewer just polls the files and stays decoupled from
-the engine. You can also open the standalone surfaces (e.g. to watch from another
-machine), both zero-dependency (stdlib only):
+the engine. You can also open the standalone local surfaces, both
+zero-dependency (stdlib only):
 
 ```bash
 roundtable dashboard            # web UI at http://127.0.0.1:8787 (--open to launch a browser)
-roundtable dashboard --host 0.0.0.0 --port 9000   # expose on your LAN
+roundtable dashboard --port 9000   # pin the local dashboard port
 roundtable watch                # live dashboard right in the terminal
-roundtable stop                 # SIGTERM the in-progress run (via .roundtable/runs/run.pid)
+roundtable stop                 # SIGTERM the in-progress run/process group
 ```
 
 These show overall
@@ -202,15 +211,16 @@ roundtable serve --project . --port 0
 | `GET /api/plan` · `PUT /api/plan` | read / save the plan (validated; editing resets approval) |
 | `POST /api/plan/generate` · `GET` | spawn a detached `roundtable plan` (goal/prd/plan_file) · poll it |
 | `POST /api/approve` | validate runners against the config, then approve |
-| `POST /api/run` · `POST /api/stop` | spawn a detached run (guarded by `run.pid`) · SIGTERM it |
+| `POST /api/run` · `POST /api/stop` | spawn a detached run (guarded by `run.pid`) · stop its process group |
 | `POST /api/resume` | approve a waiting HITL task `{"task": "p1-t2"}` |
 | `POST /api/init` | scaffold `.roundtable/` + default config |
 | `GET /api/config` · `PUT /api/config` | read / save `roundtable.config.yaml` (schema-validated) |
 | `GET /api/agents` | probe installed CLIs + their models (`?timeout=s`) |
 | `GET /api/usage` | provider usage snapshots (calls, tokens, duration) |
 
-State-changing requests from browsers are limited to localhost/Tauri origins;
-non-browser clients (e.g. curl) are unaffected.
+The dashboard/API binds only to loopback hosts (`127.0.0.1`, `localhost`, or
+`::1`). State-changing browser requests are limited to localhost/Tauri origins,
+and plan/config mutations are rejected while a run is live.
 
 With `provider: cli` a CLI returns only stdout, so token counts are **estimated**
 from text length (~4 chars/token) and flagged with `"estimated": true` in the

@@ -33,6 +33,41 @@ from .store import Store
 logger = logging.getLogger("roundtable")
 
 
+def normalize_runner_refs(plan: Plan, config: Config) -> bool:
+    """Normalize runner refs for providers where ``model`` is the whole selector.
+
+    CLI refs use ``agent`` for the command and ``model`` for that command's model
+    token. Direct providers (pi/litellm) do not have a separate agent command, so
+    a plan-produced ``{agent: opencode-go, model: glm-5.2}`` must become
+    ``{model: opencode-go/glm-5.2}`` before it reaches the provider.
+    """
+    if config.provider not in ("pi", "litellm"):
+        return False
+    changed = False
+
+    def normalize(ref: AgentRef) -> None:
+        nonlocal changed
+        if ref.agent and ref.model:
+            # Fold {agent, model} into a single provider/id model selector.
+            if "/" not in ref.model:
+                ref.model = f"{ref.agent}/{ref.model}"
+            ref.agent = ""
+            changed = True
+        elif ref.agent and "/" in ref.agent:
+            ref.model = ref.agent
+            ref.agent = ""
+            changed = True
+
+    normalize(plan.main_runner)
+    for key in list(plan.runners):
+        normalize(plan.runners[key])
+    for phase in plan.phases:
+        normalize(phase.runner)
+        for task in phase.tasks:
+            normalize(task.runner)
+    return changed
+
+
 def validate_runners(plan: Plan, config: Config) -> None:
     """Fail fast (before any agent runs) on runners that cannot execute.
 
@@ -74,6 +109,8 @@ class Engine:
 
     async def run(self) -> Plan:
         plan = self.store.load_plan()
+        if normalize_runner_refs(plan, self.config):
+            self.store.save_plan(plan)
         if not plan.approved:
             raise RoundtableError("plan is not approved; run `roundtable approve` first")
         if isinstance(self.provider, CLIProvider):
@@ -188,16 +225,20 @@ class Engine:
             validation_error = await self._validate_phase(phase)
 
         ordered = [(t, results.get(t.id, "")) for t in phase.tasks]
-        summary = await po.summarize(phase, ordered)
+        if failed_ids or skipped_ids or validation_error is not None:
+            summary = _failure_summary(phase, failed_ids, skipped_ids, validation_error)
+        else:
+            summary = await po.summarize(phase, ordered)
         self.store.write_phase_summary(phase, summary)
         phase.summary_path = str(self.store.phase_dir(phase) / "phase-summary.md")
         self.store.record_event(
             "phase_summarized", message=f"phase {phase.id} summarized", phase_id=phase.id,
         )
 
-        # Context clean: Main receives ONLY the summary string.
-        entry = await main.integrate_phase(plan.goal, phase, summary)
-        self._append_progress(phase, entry)
+        if not (failed_ids or skipped_ids or validation_error is not None):
+            # Context clean: Main receives ONLY the summary string.
+            entry = await main.integrate_phase(plan.goal, phase, summary)
+            self._append_progress(phase, entry)
 
         # A phase is done only if every task completed AND the phase-level
         # validation (when configured) passed; failed OR skipped tasks (the
@@ -397,7 +438,21 @@ class Engine:
 
             # Phase Orchestrator defines the task's work -> TASK.md
             project_ctx = self.config.project_context
-            task_def = await po.define_task(plan.goal, phase, task, project_context=project_ctx)
+            try:
+                task_def = await po.define_task(
+                    plan.goal, phase, task, project_context=project_ctx
+                )
+            except (RoundtableError, RuntimeError, TimeoutError) as e:
+                detail = f"task definition failed: {e}"
+                task.status = Status.failed
+                self.store.write_result(phase, task, f"error: {detail}")
+                await self._save(plan)
+                self.store.record_event(
+                    "task_failed",
+                    message=f"task {task.id} failed while defining work: {str(e)[:200]}",
+                    phase_id=phase.id, task_id=task.id, title=task.title,
+                )
+                raise TaskFailed(task.id, detail)
             self.store.write_task_def(phase, task, task_def)
 
             # Task Agent (its own choosable agent + model) executes -> result.md
@@ -630,6 +685,27 @@ def _phase_md(phase: Phase) -> str:
     for i, t in enumerate(phase.tasks, start=1):
         dep = f" (depends on {', '.join(t.depends_on)})" if t.depends_on else ""
         lines.append(f"{i}. **{t.title}** `[{t.id}]` — `{t.runner}`{dep}")
+    return "\n".join(lines) + "\n"
+
+
+def _failure_summary(
+    phase: Phase,
+    failed_ids: set[str],
+    skipped_ids: set[str],
+    validation_error: str | None,
+) -> str:
+    lines = [
+        f"# Phase {phase.index}: {phase.title} did not complete",
+        "",
+        "Roundtable stopped this phase after a task or validation failure.",
+        "",
+    ]
+    if failed_ids:
+        lines.append(f"- Failed tasks: {', '.join(sorted(failed_ids))}")
+    if skipped_ids:
+        lines.append(f"- Skipped tasks: {', '.join(sorted(skipped_ids))}")
+    if validation_error is not None:
+        lines.append(f"- Validation error: {validation_error}")
     return "\n".join(lines) + "\n"
 
 

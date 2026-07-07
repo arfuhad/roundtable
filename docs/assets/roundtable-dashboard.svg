@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">Roundtable web dashboard preview</title>
+  <desc id="desc">A web dashboard showing run progress, active agents, phase status, usage, and a live event timeline.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7fafc"/>
+      <stop offset="1" stop-color="#eef2ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#0f172a" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="760" fill="url(#bg)"/>
+  <rect x="58" y="48" width="1164" height="664" rx="18" fill="#ffffff" filter="url(#shadow)"/>
+  <rect x="58" y="48" width="1164" height="58" rx="18" fill="#111827"/>
+  <circle cx="88" cy="77" r="7" fill="#ef4444"/>
+  <circle cx="112" cy="77" r="7" fill="#f59e0b"/>
+  <circle cx="136" cy="77" r="7" fill="#22c55e"/>
+  <text x="174" y="83" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18" font-weight="700" fill="#f9fafb">Roundtable Dashboard</text>
+  <text x="1052" y="82" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" fill="#cbd5e1">127.0.0.1:8787</text>
+
+  <text x="92" y="154" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="750" fill="#111827">Add retry with backoff to the HTTP client</text>
+  <rect x="92" y="178" width="720" height="14" rx="7" fill="#e5e7eb"/>
+  <rect x="92" y="178" width="504" height="14" rx="7" fill="#2563eb"/>
+  <text x="830" y="192" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="650" fill="#2563eb">70% complete</text>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <rect x="92" y="230" width="244" height="118" rx="12" fill="#f8fafc" stroke="#e2e8f0"/>
+    <text x="116" y="264" font-size="13" font-weight="750" fill="#64748b">ACTIVE AGENTS</text>
+    <text x="116" y="303" font-size="34" font-weight="800" fill="#111827">3</text>
+    <text x="170" y="303" font-size="15" fill="#475569">running now</text>
+
+    <rect x="364" y="230" width="244" height="118" rx="12" fill="#f8fafc" stroke="#e2e8f0"/>
+    <text x="388" y="264" font-size="13" font-weight="750" fill="#64748b">TASKS</text>
+    <text x="388" y="303" font-size="34" font-weight="800" fill="#111827">8 / 12</text>
+    <text x="500" y="303" font-size="15" fill="#475569">done</text>
+
+    <rect x="636" y="230" width="244" height="118" rx="12" fill="#f8fafc" stroke="#e2e8f0"/>
+    <text x="660" y="264" font-size="13" font-weight="750" fill="#64748b">TOKENS</text>
+    <text x="660" y="303" font-size="34" font-weight="800" fill="#111827">142k</text>
+    <text x="760" y="303" font-size="15" fill="#475569">exact via pi</text>
+
+    <rect x="908" y="230" width="244" height="118" rx="12" fill="#f8fafc" stroke="#e2e8f0"/>
+    <text x="932" y="264" font-size="13" font-weight="750" fill="#64748b">STATUS</text>
+    <rect x="932" y="284" width="108" height="30" rx="15" fill="#dcfce7"/>
+    <text x="953" y="305" font-size="14" font-weight="750" fill="#166534">running</text>
+  </g>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <rect x="92" y="386" width="522" height="260" rx="12" fill="#ffffff" stroke="#e2e8f0"/>
+    <text x="118" y="422" font-size="16" font-weight="800" fill="#111827">Phases and tasks</text>
+    <circle cx="128" cy="462" r="9" fill="#22c55e"/>
+    <text x="150" y="467" font-size="15" font-weight="700" fill="#111827">Phase 1: HTTP client structure</text>
+    <text x="150" y="492" font-size="13" fill="#64748b">3 tasks complete, validation passed</text>
+    <circle cx="128" cy="532" r="9" fill="#2563eb"/>
+    <text x="150" y="537" font-size="15" font-weight="700" fill="#111827">Phase 2: retry policy</text>
+    <text x="150" y="562" font-size="13" fill="#64748b">2 tasks running across opencode-go and Claude</text>
+    <circle cx="128" cy="602" r="9" fill="#cbd5e1"/>
+    <text x="150" y="607" font-size="15" font-weight="700" fill="#111827">Phase 3: docs and cleanup</text>
+    <text x="150" y="632" font-size="13" fill="#64748b">waiting on Phase 2 summary</text>
+
+    <rect x="646" y="386" width="506" height="260" rx="12" fill="#ffffff" stroke="#e2e8f0"/>
+    <text x="672" y="422" font-size="16" font-weight="800" fill="#111827">Live event timeline</text>
+    <text x="672" y="462" font-size="13" fill="#64748b">12:41:08</text>
+    <text x="744" y="462" font-size="14" fill="#111827">task p2-t1 started on opencode-go/mimo-v2.5-pro</text>
+    <text x="672" y="502" font-size="13" fill="#64748b">12:42:19</text>
+    <text x="744" y="502" font-size="14" fill="#111827">validation command running: pytest tests/http -q</text>
+    <text x="672" y="542" font-size="13" fill="#64748b">12:43:03</text>
+    <text x="744" y="542" font-size="14" fill="#111827">phase summary written to .roundtable/phases/phase-02</text>
+    <text x="672" y="582" font-size="13" fill="#64748b">12:43:11</text>
+    <text x="744" y="582" font-size="14" fill="#111827">Main received summary, raw transcripts discarded</text>
+  </g>
+</svg>

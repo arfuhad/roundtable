@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -197,6 +198,33 @@ async def _retry(coro_factory: Callable[[], Awaitable[Any]], *, attempts: int) -
                 await asyncio.sleep(min(2.0 * (n + 1), 8.0))
     assert last is not None
     raise last
+
+
+async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
+    """Terminate a subprocess, escalating to kill if it does not exit promptly."""
+    if proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+
+
+async def _cancel_reader(task: "asyncio.Task[Any]") -> None:
+    """Cancel a background stream-reader task and wait for it to settle, so it is
+    not left orphaned (which can log 'Task was destroyed but it is pending')."""
+    if task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -406,9 +434,13 @@ class CLIProvider:
                         on_output("".join(batch))
                     await proc.wait()
             except TimeoutError:
-                proc.kill()
-                await proc.wait()
+                await _terminate_process(proc)
+                await _cancel_reader(stderr_task)
                 raise TimeoutError(f"agent {model!r} timed out after {self.timeout}s")
+            except asyncio.CancelledError:
+                await _terminate_process(proc)
+                await _cancel_reader(stderr_task)
+                raise
 
             err = await stderr_task
             out_text = "".join(buf)
@@ -425,9 +457,11 @@ class CLIProvider:
                 timeout=self.timeout,
             )
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await _terminate_process(proc)
             raise TimeoutError(f"agent {model!r} timed out after {self.timeout}s")
+        except asyncio.CancelledError:
+            await _terminate_process(proc)
+            raise
         if proc.returncode != 0:
             # Many CLIs print the actual error to stdout, not stderr (e.g. claude's
             # "model ... may not exist"), so surface whichever stream has content.
@@ -502,10 +536,13 @@ class CLIProvider:
         try:
             await asyncio.wait_for(proc.wait(), timeout=self.timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await _terminate_process(proc)
             await drain_fut
             raise TimeoutError(f"agent {model!r} timed out after {self.timeout}s")
+        except asyncio.CancelledError:
+            await _terminate_process(proc)
+            await drain_fut
+            raise
 
         await drain_fut
 
@@ -812,17 +849,33 @@ class PiProvider:
                     _emit(buf.decode("utf-8", "replace"))
                 await proc.wait()
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await _terminate_process(proc)
+            await _cancel_reader(stderr_task)
             raise TimeoutError(f"pi ({role}) timed out after {self.timeout}s")
+        except asyncio.CancelledError:
+            await _terminate_process(proc)
+            await _cancel_reader(stderr_task)
+            raise
 
         err = await stderr_task
         out = "".join(lines)
         if proc.returncode != 0:
             err_text = err.decode("utf-8", "replace").strip()
             detail = (err_text or out.strip() or "(no output on stdout/stderr)")[-800:]
+            auth = _auth_error(detail)
+            if auth:
+                raise RoundtableError(
+                    f"pi ({role}) could not authenticate provider {auth!r}; "
+                    f"run the pi/omp login flow for {auth} or set its API key, "
+                    "then retry."
+                )
             raise RuntimeError(f"pi ({role}) exited {proc.returncode}: {detail}")
         return out
+
+
+def _auth_error(text: str) -> str | None:
+    m = re.search(r"No API key found for ([A-Za-z0-9_.-]+)", text)
+    return m.group(1) if m else None
 
 
 def _pi_event_summary(line: str) -> str | None:

@@ -226,6 +226,25 @@ async def test_pi_provider_missing_binary_raises_helpful_error():
         await prov.complete(model="m", system="", user="hi", role="task_exec")
 
 
+async def test_pi_provider_auth_error_is_concise(tmp_path):
+    script = tmp_path / "fake-omp.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        "echo 'error: No API key found for fireworks.' >&2\n"
+        "exit 1\n"
+    )
+    script.chmod(0o755)
+    prov = PiProvider(PiOptions(flavor="omp", command=[str(script)]), max_retries=0)
+
+    with pytest.raises(RoundtableError) as ei:
+        await prov.complete(model="opencode-go/glm-5.2", system="", user="hi", role="phase_define")
+
+    msg = str(ei.value)
+    assert "fireworks" in msg
+    assert "authenticate provider" in msg
+    assert "dist/cli.js" not in msg
+
+
 # --------------------------------------------------------------------------- #
 # end-to-end subprocess (fake `pi`)
 # --------------------------------------------------------------------------- #

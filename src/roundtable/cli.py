@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import datetime as _dt
 import os
+import signal
 import shutil
 import sys
 import threading
@@ -38,7 +39,7 @@ from .agents import Analyst, Planner
 from .config import Config, load_config, write_default_config
 from .dashboard import make_server
 from .discovery import AgentStatus, discover
-from .engine import Engine
+from .engine import Engine, normalize_runner_refs
 from .errors import RoundtableError
 from .insights import build_state, render_text
 from . import modelpick
@@ -128,6 +129,7 @@ async def make_plan(
         phase.runner = phase.runner or roles["phase"]
         for task in phase.tasks:
             task.runner = task.runner or roles["task"]
+    normalize_runner_refs(plan, config)
     plan = Plan.model_validate(plan.model_dump())  # re-run validators after edits
 
     archive_dir = store.archive_current_run()
@@ -388,6 +390,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     store.write_run_pid(os.getpid())  # this process IS the run; guards double-launch
     try:
         return asyncio.run(_run_with_progress(engine, store, args))
+    except asyncio.CancelledError:
+        print("\nterminated — re-run `roundtable run` to resume", file=sys.stderr)
+        return 143
     except KeyboardInterrupt:
         print("\ninterrupted — re-run `roundtable run` to resume", file=sys.stderr)
         return 130
@@ -420,6 +425,19 @@ async def _run_with_progress(engine: Engine, store: Store, args: argparse.Namesp
     print(banner())  # show the link immediately, before the first render
 
     task = asyncio.create_task(engine.run())
+    loop = asyncio.get_running_loop()
+    terminated = False
+
+    def _on_sigterm() -> None:
+        nonlocal terminated
+        terminated = True
+        task.cancel()
+
+    try:
+        loop.add_signal_handler(signal.SIGTERM, _on_sigterm)
+        has_sigterm_handler = True
+    except (NotImplementedError, RuntimeError):
+        has_sigterm_handler = False
     try:
         if live:
             while not task.done():
@@ -440,8 +458,13 @@ async def _run_with_progress(engine: Engine, store: Store, args: argparse.Namesp
             await task
         except BaseException:
             pass
+        if terminated:
+            print("\nterminated — re-run `roundtable run` to resume", file=sys.stderr)
+            return 143
         raise
     finally:
+        if has_sigterm_handler:
+            loop.remove_signal_handler(signal.SIGTERM)
         if httpd:
             httpd.shutdown()
             httpd.server_close()
@@ -627,7 +650,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="don't render the live terminal view (just run)")
     sp.add_argument("--interval", type=float, default=1.0,
                     help="live terminal refresh seconds (default 1)")
-    sp.add_argument("--host", default="127.0.0.1", help="dashboard bind address")
+    sp.add_argument("--host", default="127.0.0.1", help="dashboard bind address (localhost only)")
     sp.add_argument("--port", type=int, default=0,
                     help="dashboard port (0 = pick a free port)")
     sp.add_argument("--open", action="store_true", help="open the dashboard in a browser")
@@ -640,7 +663,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("dashboard", help="serve a live web dashboard of the run")
     sp.add_argument("--project", default=".")
-    sp.add_argument("--host", default="127.0.0.1", help="bind address (use 0.0.0.0 for LAN access)")
+    sp.add_argument("--host", default="127.0.0.1", help="bind address (localhost only)")
     sp.add_argument("--port", type=int, default=8787)
     sp.add_argument("--open", action="store_true", help="open the dashboard in a browser")
     sp.set_defaults(func=cmd_dashboard)
@@ -650,7 +673,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve the dashboard + REST control API (machine-readable URL on stdout)",
     )
     sp.add_argument("--project", default=".")
-    sp.add_argument("--host", default="127.0.0.1", help="bind address")
+    sp.add_argument("--host", default="127.0.0.1", help="bind address (localhost only)")
     sp.add_argument("--port", type=int, default=0, help="port (0 = pick a free port)")
     sp.set_defaults(func=cmd_serve)
 
@@ -668,7 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--project", default=".")
     sp.set_defaults(func=cmd_resume)
 
-    sp = sub.add_parser("stop", help="stop the in-progress run (SIGTERM via run.pid)")
+    sp = sub.add_parser("stop", help="stop the in-progress run/process group")
     sp.add_argument("--project", default=".")
     sp.set_defaults(func=cmd_stop)
 

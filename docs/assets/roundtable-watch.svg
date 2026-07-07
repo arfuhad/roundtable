@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">Roundtable terminal watch preview</title>
+  <desc id="desc">A terminal watch view showing progress, active tasks, usage, phase status, and recent events.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#020617" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="760" fill="#e5e7eb"/>
+  <rect x="72" y="54" width="1136" height="652" rx="18" fill="#020617" filter="url(#shadow)"/>
+  <rect x="72" y="54" width="1136" height="48" rx="18" fill="#111827"/>
+  <circle cx="102" cy="78" r="7" fill="#ef4444"/>
+  <circle cx="126" cy="78" r="7" fill="#f59e0b"/>
+  <circle cx="150" cy="78" r="7" fill="#22c55e"/>
+  <text x="184" y="84" font-family="SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="15" fill="#cbd5e1">roundtable watch --project .</text>
+
+  <g font-family="SFMono-Regular, Menlo, Monaco, Consolas, monospace">
+    <text x="104" y="142" font-size="22" font-weight="700" fill="#f8fafc">Roundtable run</text>
+    <text x="104" y="178" font-size="15" fill="#94a3b8">goal: Add retry with backoff to the HTTP client</text>
+    <text x="104" y="214" font-size="15" fill="#38bdf8">dashboard: http://127.0.0.1:8787</text>
+
+    <text x="104" y="270" font-size="16" fill="#f8fafc">Progress</text>
+    <rect x="104" y="292" width="760" height="18" rx="9" fill="#1e293b"/>
+    <rect x="104" y="292" width="532" height="18" rx="9" fill="#22c55e"/>
+    <text x="888" y="307" font-size="15" fill="#86efac">8/12 tasks complete</text>
+
+    <text x="104" y="360" font-size="16" fill="#f8fafc">Active agents</text>
+    <text x="104" y="394" font-size="14" fill="#94a3b8">p2-t1</text>
+    <text x="178" y="394" font-size="14" fill="#e2e8f0">opencode-go/mimo-v2.5-pro</text>
+    <text x="470" y="394" font-size="14" fill="#38bdf8">editing src/http/retry.py</text>
+    <text x="104" y="426" font-size="14" fill="#94a3b8">p2-t2</text>
+    <text x="178" y="426" font-size="14" fill="#e2e8f0">anthropic/claude-sonnet-4-5</text>
+    <text x="470" y="426" font-size="14" fill="#38bdf8">writing tests</text>
+    <text x="104" y="458" font-size="14" fill="#94a3b8">main</text>
+    <text x="178" y="458" font-size="14" fill="#e2e8f0">anthropic/claude-opus-4-1</text>
+    <text x="470" y="458" font-size="14" fill="#38bdf8">waiting for phase summary</text>
+
+    <text x="104" y="526" font-size="16" fill="#f8fafc">Phase status</text>
+    <text x="104" y="560" font-size="14" fill="#22c55e">done</text>
+    <text x="178" y="560" font-size="14" fill="#e2e8f0">Phase 1 - client structure</text>
+    <text x="104" y="592" font-size="14" fill="#38bdf8">run </text>
+    <text x="178" y="592" font-size="14" fill="#e2e8f0">Phase 2 - retry policy</text>
+    <text x="104" y="624" font-size="14" fill="#64748b">wait</text>
+    <text x="178" y="624" font-size="14" fill="#e2e8f0">Phase 3 - docs and cleanup</text>
+
+    <text x="710" y="360" font-size="16" fill="#f8fafc">Usage</text>
+    <text x="710" y="394" font-size="14" fill="#94a3b8">calls</text>
+    <text x="850" y="394" font-size="14" fill="#e2e8f0">19</text>
+    <text x="710" y="426" font-size="14" fill="#94a3b8">tokens</text>
+    <text x="850" y="426" font-size="14" fill="#e2e8f0">142,381 exact</text>
+    <text x="710" y="458" font-size="14" fill="#94a3b8">duration</text>
+    <text x="850" y="458" font-size="14" fill="#e2e8f0">11m 28s</text>
+
+    <text x="710" y="526" font-size="16" fill="#f8fafc">Recent events</text>
+    <text x="710" y="560" font-size="13" fill="#94a3b8">12:42:19</text>
+    <text x="806" y="560" font-size="13" fill="#e2e8f0">validation started: pytest tests/http -q</text>
+    <text x="710" y="592" font-size="13" fill="#94a3b8">12:43:03</text>
+    <text x="806" y="592" font-size="13" fill="#e2e8f0">task p2-t1 completed</text>
+    <text x="710" y="624" font-size="13" fill="#94a3b8">12:43:11</text>
+    <text x="806" y="624" font-size="13" fill="#e2e8f0">phase summary written</text>
+  </g>
+</svg>

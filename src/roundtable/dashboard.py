@@ -20,9 +20,10 @@ control API used by the page's buttons and by the desktop app:
     GET  /api/agents          probe configured CLIs + their models (?timeout=s)
     GET  /api/usage           provider usage snapshots from the event log
 
-State-changing requests from browsers are restricted to localhost / Tauri
-origins (non-browser clients send no Origin header and pass). Reads come
-fresh from disk per request, so the server tracks runs started elsewhere.
+The server only binds to loopback hosts. State-changing requests from browsers
+are restricted to localhost / Tauri origins; non-browser local clients send no
+Origin header and pass. Reads come fresh from disk per request, so the server
+tracks runs started elsewhere.
 """
 
 from __future__ import annotations
@@ -63,8 +64,17 @@ def _origin_allowed(origin: str) -> bool:
     return host in ("localhost", "127.0.0.1", "::1")
 
 
+def _is_loopback_bind(host: str) -> bool:
+    return host in ("localhost", "127.0.0.1", "::1")
+
+
 def make_server(store: Store, *, host: str = "127.0.0.1", port: int = 8787) -> tuple[ThreadingHTTPServer, str]:
     """Build (but do not start) the dashboard/API server; returns (server, url)."""
+    if not _is_loopback_bind(host):
+        raise RoundtableError(
+            "dashboard/API only binds to localhost for safety; use "
+            "--host 127.0.0.1 or --host localhost"
+        )
     page = PAGE.encode("utf-8")
 
     class Handler(BaseHTTPRequestHandler):
@@ -174,6 +184,15 @@ def make_server(store: Store, *, host: str = "127.0.0.1", port: int = 8787) -> t
 Payload = tuple[int, dict[str, Any]]
 
 
+def _ensure_no_live_run(store: Store) -> None:
+    pid = runctl.current_run_pid(store)
+    if pid is not None:
+        raise RoundtableError(
+            f"cannot modify plan/config while a run is in progress (pid={pid}); "
+            "stop it or wait for it to finish"
+        )
+
+
 def _api_state(store: Store, body: dict, query: dict) -> Payload:
     return 200, build_state(store)
 
@@ -196,6 +215,7 @@ def _api_plan_get(store: Store, body: dict, query: dict) -> Payload:
 
 
 def _api_plan_put(store: Store, body: dict, query: dict) -> Payload:
+    _ensure_no_live_run(store)
     plan_data = body.get("plan", body)
     plan = Plan.model_validate(plan_data)
     plan.approved = False  # editing a plan always resets the human gate
@@ -206,6 +226,7 @@ def _api_plan_put(store: Store, body: dict, query: dict) -> Payload:
 
 
 def _api_plan_generate_post(store: Store, body: dict, query: dict) -> Payload:
+    _ensure_no_live_run(store)
     pid, msg = runctl.start_plan(
         store,
         goal=body.get("goal"),
@@ -257,6 +278,7 @@ def _api_resume(store: Store, body: dict, query: dict) -> Payload:
 
 
 def _api_init(store: Store, body: dict, query: dict) -> Payload:
+    _ensure_no_live_run(store)
     store.scaffold()
     cfg = store.root / CONFIG_FILENAME
     created = False
@@ -281,6 +303,7 @@ def _api_config_get(store: Store, body: dict, query: dict) -> Payload:
 
 
 def _api_config_put(store: Store, body: dict, query: dict) -> Payload:
+    _ensure_no_live_run(store)
     text = body.get("text")
     if not isinstance(text, str):
         raise RoundtableError("missing 'text' (the YAML config content) in request body")
