@@ -148,7 +148,7 @@ models:
 Install the extra and set your provider API keys:
 
 ```bash
-uv tool install "roundtable-cli[litellm] @ git+https://github.com/arfuhad/roundtable.git"
+uv tool install "roundtable-cli[litellm]"
 export OPENAI_API_KEY=…   # and/or ANTHROPIC_API_KEY, etc. — whatever your models need
 ```
 

@@ -1,5 +1,6 @@
 # Roundtable
 
+[![PyPI](https://img.shields.io/pypi/v/roundtable-cli.svg)](https://pypi.org/project/roundtable-cli/)
 [![CI](https://github.com/arfuhad/roundtable/actions/workflows/ci.yml/badge.svg)](https://github.com/arfuhad/roundtable/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
@@ -66,12 +67,12 @@ graph TD
 
 Install it as a global tool so `roundtable` works in any project.
 
-**From GitHub (recommended):**
+**From PyPI (recommended):**
 
 ```bash
-uv tool install git+https://github.com/arfuhad/roundtable.git
+uv tool install roundtable-cli
 # or with pipx:
-pipx install git+https://github.com/arfuhad/roundtable.git
+pipx install roundtable-cli
 ```
 
 **From source** (to hack on Roundtable itself):
@@ -82,17 +83,12 @@ uv tool install --editable .        # or: pipx install --editable .
 ```
 
 The base install pulls only `pydantic` + `pyyaml` — the default `cli` backend shells
-out to LLM CLIs you already have, so no API SDKs are added. Optional extras append
-the same `@ git+…` reference to the package name:
+out to LLM CLIs you already have, so no API SDKs are added. Optional extras:
 
 ```bash
-# direct API calls via LiteLLM:
-uv tool install "roundtable-cli[litellm] @ git+https://github.com/arfuhad/roundtable.git"
-# expose Roundtable to MCP clients:
-uv tool install "roundtable-cli[mcp] @ git+https://github.com/arfuhad/roundtable.git"
+uv tool install "roundtable-cli[litellm]"   # direct API calls via LiteLLM
+uv tool install "roundtable-cli[mcp]"       # expose Roundtable to MCP clients
 ```
-
-Not published to PyPI yet, so install from the repo as above.
 
 ## Quick start (in an existing project)
 
