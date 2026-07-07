@@ -9,10 +9,33 @@ description = "Multi-LLM planning & orchestration that routes work across the te
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Abdur Rahman" }]
+keywords = [
+    "llm", "ai-agents", "agent-orchestration", "multi-agent", "orchestration",
+    "cli", "developer-tools", "claude", "codex", "code-generation",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development",
+]
 dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/arfuhad/roundtable"
+Repository = "https://github.com/arfuhad/roundtable"
+Issues = "https://github.com/arfuhad/roundtable/issues"
 
 [project.optional-dependencies]
 litellm = ["litellm>=1.83"]   # only needed for `provider: litellm` (API access)
